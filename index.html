@@ -172,7 +172,7 @@ pre.rule{background:var(--card);border:1px solid var(--line);border-radius:6px;p
 <div class="wrap">
   <header>
     <div class="brand"><h1>CrewPay</h1><small>Weekly payroll</small></div>
-    <button class="syncbtn" onclick="openSync()"><span class="dot" id="syncDot"></span><span id="syncText">Local only</span></button>
+    <button class="syncbtn" onclick="openSync()"><span class="dot connecting" id="syncDot"></span><span id="syncText">Connecting</span></button>
   </header>
   <nav>
     <button class="tab" data-v="week" onclick="go('week')">This week</button>
@@ -216,6 +216,7 @@ function load(){
 function save(msg){
   state.updatedAt = Date.now();
   try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch(e){}
+  setDirty(true);
   pushRemote();
   render();
   if (msg) toast(msg);
@@ -610,11 +611,29 @@ function closeModal(){ document.getElementById('modalWrap').classList.remove('op
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------- Firebase sync ---------- */
-let db = null, unsub = null, pushTimer = null, syncStatus = 'local', syncErr = '';
+/* Your Firebase project. This is fine to keep in a public repo: the
+   Firestore rules and your private sync code are what protect the data. */
+const DEFAULT_FB_CONFIG = {
+  apiKey: "AIzaSyBfLpsOzH7gi6UJuH_TrRxyCt4y0PSg4m0",
+  authDomain: "paytrack-2253f.firebaseapp.com",
+  projectId: "paytrack-2253f",
+  storageBucket: "paytrack-2253f.firebasestorage.app",
+  messagingSenderId: "139542624456",
+  appId: "1:139542624456:web:685a94c6e73841d0cb8dfd"
+};
+/* Baked-in sync code: every device that opens this file joins the same payroll automatically. */
+const BAKED_SYNC_CODE = "2R9A-VPTV";
+const LS_DIRTY = 'crewpay_unsynced';
+let db = null, unsub = null, pushTimer = null, syncStatus = 'connecting', syncErr = '', lastSync = null;
+const isDirty = () => localStorage.getItem(LS_DIRTY) === '1';
+const setDirty = v => v ? localStorage.setItem(LS_DIRTY, '1') : localStorage.removeItem(LS_DIRTY);
+const STATUS = {needcode:'Set up sync', connecting:'Connecting', saving:'Saving', synced:'Synced', offline:'Offline', error:'Sync error'};
+
 function setSync(s, err){
   syncStatus = s; syncErr = err || '';
-  document.getElementById('syncDot').className = 'dot ' + s;
-  document.getElementById('syncText').textContent = {local:'Local only', connecting:'Connecting', synced:'Synced', error:'Sync error'}[s];
+  if (s === 'synced') lastSync = new Date();
+  document.getElementById('syncDot').className = 'dot ' + (s === 'saving' ? 'connecting' : s);
+  document.getElementById('syncText').textContent = STATUS[s];
 }
 function loadScript(src){ return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Could not load Firebase. Check your internet connection.')); document.head.appendChild(s); }); }
 function parseConfig(t){
@@ -622,102 +641,153 @@ function parseConfig(t){
   try { return JSON.parse(t); } catch(e){}
   return (new Function('return (' + t + ')'))();
 }
+function getConfig(){
+  if (BAKED_SYNC_CODE) return DEFAULT_FB_CONFIG;
+  const t = localStorage.getItem(LS_CFG);
+  if (t){ try { const c = parseConfig(t); if (c.projectId) return c; } catch(e){} }
+  return DEFAULT_FB_CONFIG;
+}
 const genCode = () => Array.from({length:8}, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
 
 async function initFirebase(){
-  const cfgTxt = localStorage.getItem(LS_CFG);
-  if (!cfgTxt){ setSync('local'); return; }
-  let cfg;
-  try { cfg = parseConfig(cfgTxt); if (!cfg.projectId) throw new Error(); }
-  catch(e){ setSync('error', 'The saved Firebase config is not valid. Paste it again.'); return; }
-  setSync('connecting');
+  setSync(navigator.onLine ? 'connecting' : 'offline');
   try {
     if (!window.firebase){ await loadScript(FB + 'firebase-app-compat.js'); await loadScript(FB + 'firebase-firestore-compat.js'); }
-    if (!firebase.apps.length) firebase.initializeApp(cfg);
+    if (!firebase.apps.length) firebase.initializeApp(getConfig());
     db = firebase.firestore();
-    let code = localStorage.getItem(LS_CODE);
-    if (!code){ code = genCode(); localStorage.setItem(LS_CODE, code); }
-    subscribe(code);
-  } catch(e){ console.error(e); setSync('error', e.message); }
+  } catch(e){ console.error(e); setSync(navigator.onLine ? 'error' : 'offline', e.message); return; }
+  if (BAKED_SYNC_CODE){
+    // A device that hasn't used this code before takes the cloud copy, unless the cloud is still empty.
+    if (localStorage.getItem(LS_CODE) !== BAKED_SYNC_CODE){ localStorage.setItem(LS_CODE, BAKED_SYNC_CODE); setDirty(false); }
+    subscribe(BAKED_SYNC_CODE);
+    return;
+  }
+  const code = localStorage.getItem(LS_CODE);
+  if (code) subscribe(code);
+  else { setSync('needcode'); openSync(); }
 }
+
+/* Live listener: any change saved on another device arrives here within seconds. */
 function subscribe(code){
   if (unsub) unsub();
+  setSync('connecting');
   unsub = db.collection(COLLECTION).doc(code).onSnapshot(snap => {
     if (snap.metadata.hasPendingWrites) return;
-    setSync('synced');
-    if (!snap.exists){ pushNow(); return; }
-    let remote;
-    try { remote = JSON.parse(snap.data().json); } catch(e){ return; }
-    if ((remote.updatedAt || 0) > (state.updatedAt || 0)){
-      state = remote;
-      localStorage.setItem(LS_KEY, JSON.stringify(state));
-      render();
-    } else if ((remote.updatedAt || 0) < (state.updatedAt || 0)){
-      pushNow();
+    if (!snap.exists || isDirty()){ pushNow(); return; }   // this device has changes the cloud hasn't saved yet
+    const json = snap.data().json;
+    if (json && json !== JSON.stringify(state)){
+      try { state = JSON.parse(json); localStorage.setItem(LS_KEY, json); render(); } catch(e){}
     }
-  }, err => setSync('error', err.message.includes('permission') ? 'Firestore blocked access. Check your database rules (step 6).' : err.message));
+    setSync('synced');
+  }, err => setSync('error', err.message.includes('permission') ? 'Firestore blocked access. Check your database rules.' : err.message));
 }
 function pushRemote(){ if (!db) return; clearTimeout(pushTimer); pushTimer = setTimeout(pushNow, 400); }
 function pushNow(){
-  if (!db) return;
   const code = localStorage.getItem(LS_CODE);
-  db.collection(COLLECTION).doc(code).set({json: JSON.stringify(state), updatedAt: state.updatedAt})
-    .then(() => setSync('synced'))
-    .catch(e => setSync('error', e.message));
+  if (!db || !code) return;
+  setSync(navigator.onLine ? 'saving' : 'offline');
+  const json = JSON.stringify(state);
+  db.collection(COLLECTION).doc(code).set({json, updatedAt: firebase.firestore.FieldValue.serverTimestamp()})
+    .then(() => { if (JSON.stringify(state) === json) setDirty(false); setSync('synced'); })
+    .catch(e => setSync('error', e.message.includes('permission') ? 'Firestore blocked access. Check your database rules.' : e.message));
 }
+window.addEventListener('online', () => { if (!db) initFirebase(); else if (isDirty()) pushNow(); else setSync('synced'); });
+window.addEventListener('offline', () => setSync('offline'));
+document.addEventListener('visibilitychange', () => { if (!document.hidden && db && isDirty()) pushNow(); });
 
 function openSync(){
+  if (BAKED_SYNC_CODE) return openBakedSync();
   const code = localStorage.getItem(LS_CODE);
-  const hasCfg = !!localStorage.getItem(LS_CFG);
+  const when = lastSync ? lastSync.toLocaleTimeString('en-PH', {hour:'numeric', minute:'2-digit'}) : '';
+  const msg = {
+    needcode: 'This device is not linked yet. Pick an option below.',
+    connecting: 'Connecting to Firebase.',
+    saving: 'Saving your latest changes.',
+    synced: `All devices are up to date. Last synced at ${when}.`,
+    offline: 'You are offline. Changes are saved on this device and will upload automatically when you reconnect.',
+    error: 'Sync error: ' + esc(syncErr)
+  }[syncStatus];
   openModal(`<h3>Sync across devices</h3>
-    <p style="margin-top:0"><span class="dot ${syncStatus}" style="display:inline-block"></span> ${{local:'Data is saved on this device only.', connecting:'Connecting to Firebase.', synced:'Connected. Changes sync to every device using the same code.', error:'Sync error: ' + esc(syncErr)}[syncStatus]}</p>
-    <details ${hasCfg ? '' : 'open'}><summary>How to set up Firebase (one time)</summary><ol>
-      <li>Go to console.firebase.google.com. You can reuse your PayTrack project, or click Add project to make a new one.</li>
-      <li>Open Build, then Firestore Database. If it is not created yet, click Create database and start in test mode.</li>
-      <li>Open Project settings (gear icon). Under Your apps, register a Web app (the &lt;/&gt; icon) if you don't have one.</li>
-      <li>Copy the firebaseConfig object, the part inside the curly braces.</li>
-      <li>Paste it in box 1 below and tap Save and connect.</li>
-      <li>In Firestore Database, open Rules and make sure the payroll collection is allowed. If you reuse PayTrack's project, add the payroll block next to your paytrack block:
-        <pre class="rule">match /payroll/{document=**} {
-  allow read, write: if true;
-}</pre></li>
-      <li>On your other devices, open the same site, paste the same config, then enter this device's sync code in box 2.</li>
-    </ol></details>
-    <label class="field"><span>1. Firebase config</span><textarea id="f_cfg" placeholder='{ apiKey: "...", authDomain: "...", projectId: "...", ... }'>${esc(localStorage.getItem(LS_CFG) || '')}</textarea></label>
-    <div class="row" style="margin-bottom:16px"><button class="btn primary" onclick="saveConfig()">Save and connect</button>${hasCfg ? '<button class="btn danger" onclick="disconnect()">Disconnect</button>' : ''}</div>
-    ${hasCfg ? `<div class="field"><span>2. Sync code</span>
-      <p class="muted" style="margin:0 0 6px;font-size:14px">This device's code. Enter it on your other devices to share the same payroll.</p>
-      <div class="row"><span class="code">${esc(code || '')}</span><button class="btn sm" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(code || '')}').then(()=>toast('Code copied'))">Copy</button></div>
+    <p style="margin-top:0"><span class="dot ${syncStatus === 'saving' ? 'connecting' : syncStatus}" style="display:inline-block"></span> ${msg}</p>
+    ${code ? `<div class="field"><span>Your sync code</span>
+      <p class="muted" style="margin:0 0 6px;font-size:14px">Enter this once on each new device. Keep it private, since anyone with the code can see this payroll.</p>
+      <div class="row"><span class="code">${esc(code)}</span><button class="btn sm" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(code)}').then(()=>toast('Code copied'))">Copy</button></div>
     </div>
-    <label class="field"><span>Have a code from another device?</span><input id="f_join" placeholder="e.g. K7M2Q9XA" style="text-transform:uppercase"></label>
-    <button class="btn" onclick="joinCode()">Use this code</button>` : ''}
-    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+    <details><summary>Switch to a different code</summary>
+      <label class="field" style="margin-top:10px"><span>Code from another device</span><input id="f_join" placeholder="e.g. K7M2Q9XA" style="text-transform:uppercase" autocomplete="off"></label>
+      <button class="btn sm" onclick="joinCode()">Use this code</button>
+    </details>`
+    : `<div class="panel" style="margin-bottom:12px">
+      <b>First device?</b>
+      <p class="muted" style="margin:4px 0 10px;font-size:14px">Create a code. Your workers and weeks on this device will be uploaded to it.</p>
+      <button class="btn vis" onclick="createCode()">Create sync code</button>
+    </div>
+    <div class="panel" style="margin-bottom:12px">
+      <b>Already using CrewPay on another device?</b>
+      <label class="field" style="margin:8px 0 10px"><span>Enter the sync code shown on that device</span><input id="f_join" placeholder="e.g. K7M2Q9XA" style="text-transform:uppercase" autocomplete="off"></label>
+      <button class="btn primary" onclick="joinCode()">Link this device</button>
+    </div>`}
+    <details><summary>Advanced: use a different Firebase project</summary>
+      <label class="field" style="margin-top:10px"><span>Firebase config</span><textarea id="f_cfg" placeholder='{ apiKey: "...", projectId: "...", ... }'>${esc(localStorage.getItem(LS_CFG) || '')}</textarea></label>
+      <div class="row"><button class="btn sm" onclick="saveConfig()">Save and reload</button>${localStorage.getItem(LS_CFG) ? '<button class="btn sm" onclick="resetConfig()">Use built-in project</button>' : ''}</div>
+    </details>
+    <div class="field"><span>Backup</span><div class="row"><button class="btn sm" onclick="exportData()">Download backup</button><label class="btn sm">Restore backup<input type="file" accept=".json" onchange="importData(this)" hidden></label></div></div>
+    <div class="modal-actions">${code ? '<button class="btn danger" onclick="disconnect()">Unlink this device</button>' : ''}<button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+function openBakedSync(){
+  const when = lastSync ? lastSync.toLocaleTimeString('en-PH', {hour:'numeric', minute:'2-digit'}) : '';
+  const msg = {
+    connecting: 'Connecting to Firebase.',
+    saving: 'Saving your latest changes.',
+    synced: `All devices are up to date. Last synced at ${when}.`,
+    offline: 'You are offline. Changes are saved on this device and will upload automatically when you reconnect.',
+    error: 'Sync error: ' + esc(syncErr)
+  }[syncStatus] || 'Connecting to Firebase.';
+  openModal(`<h3>Cloud sync</h3>
+    <p style="margin-top:0"><span class="dot ${syncStatus === 'saving' ? 'connecting' : syncStatus}" style="display:inline-block"></span> ${msg}</p>
+    <p class="muted" style="font-size:14px">Sync is built into this app. Any device that opens this link connects automatically, with no code to enter.</p>
+    <div class="field"><span>Sync code</span><span class="code">${esc(BAKED_SYNC_CODE)}</span></div>
     <div class="field"><span>Backup</span><div class="row"><button class="btn sm" onclick="exportData()">Download backup</button><label class="btn sm">Restore backup<input type="file" accept=".json" onchange="importData(this)" hidden></label></div></div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+function createCode(){
+  if (!db) return toast('Connect to the internet first');
+  const code = genCode();
+  localStorage.setItem(LS_CODE, code);
+  setDirty(true);
+  subscribe(code);
+  openSync();
+  toast('Sync code created');
+}
+async function joinCode(){
+  const code = val('f_join').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length < 6) return toast('Enter the full sync code');
+  if (!db) return toast('Connect to the internet first');
+  try {
+    const snap = await db.collection(COLLECTION).doc(code).get();
+    if (!snap.exists) return toast('No payroll found for that code. Check the letters and try again.');
+    if (state.workers.length && !confirm('Link to this code? The data on this device will be replaced by the payroll saved under it.')) return;
+    localStorage.setItem(LS_CODE, code);
+    setDirty(false);
+    state = JSON.parse(snap.data().json);
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+    render();
+    subscribe(code);
+    closeModal();
+    toast('Linked. This device now syncs automatically');
+  } catch(e){ toast(e.message.includes('permission') ? 'Firestore blocked access. Check your database rules.' : e.message); }
 }
 function saveConfig(){
   const t = val('f_cfg').trim();
   try { const c = parseConfig(t); if (!c.projectId || !c.apiKey) throw new Error(); }
   catch(e){ return toast('That does not look like a Firebase config'); }
   localStorage.setItem(LS_CFG, t);
-  toast('Saved. Connecting');
-  setTimeout(() => location.reload(), 600);
+  location.reload();
 }
-function joinCode(){
-  const code = val('f_join').trim().toUpperCase();
-  if (code.length < 6) return toast('Enter the full sync code');
-  if (!confirm('Use this code? The data on this device will be replaced by the data saved under that code.')) return;
-  localStorage.setItem(LS_CODE, code);
-  state = blank();
-  localStorage.setItem(LS_KEY, JSON.stringify(state));
-  render();
-  if (db) subscribe(code);
-  closeModal();
-  toast('Joined. Loading data');
-}
+function resetConfig(){ localStorage.removeItem(LS_CFG); location.reload(); }
 function disconnect(){
-  if (!confirm('Disconnect sync on this device? Your data stays on this device.')) return;
-  localStorage.removeItem(LS_CFG);
+  if (!confirm('Unlink this device? Your data stays on this device but will stop syncing until you enter the code again.')) return;
+  localStorage.removeItem(LS_CODE);
   location.reload();
 }
 function exportData(){
