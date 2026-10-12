@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CrewPay | Weekly Payroll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E9EBEC; --card:#FFFFFF; --ink:#1F2A33; --muted:#5D6B76; --line:#D3D8DC;
+  --vis:#F5C518; --vis-ink:#1F2A33; --plus:#2F7D4F; --minus:#C2412D; --steel:#3E5566;
+  --soft:#F3F5F6; --focus:#2563EB;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14191D; --card:#1D242A; --ink:#E8ECEF; --muted:#93A1AC; --line:#2E3840;
+    --plus:#5DBB82; --minus:#E8735F; --steel:#9FB6C6; --soft:#242D34;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14191D; --card:#1D242A; --ink:#E8ECEF; --muted:#93A1AC; --line:#2E3840;
+  --plus:#5DBB82; --minus:#E8735F; --steel:#9FB6C6; --soft:#242D34;
+}
+*{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow",system-ui,sans-serif;font-size:16px;line-height:1.45;-webkit-font-smoothing:antialiased}
+.num{font-variant-numeric:tabular-nums}
+h1,h2,h3{font-family:"Barlow Condensed","Barlow",sans-serif;margin:0;letter-spacing:.2px}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.wrap{max-width:980px;margin:0 auto;padding:0 16px 48px}
+
+/* Header */
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 0 12px}
+.brand{display:flex;align-items:baseline;gap:10px}
+.brand h1{font-size:30px;line-height:1}
+.brand small{color:var(--muted);font-size:14px}
+.syncbtn{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:7px 14px;font-size:14px;display:flex;align-items:center;gap:8px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+.dot.synced{background:var(--plus)} .dot.connecting{background:var(--vis)} .dot.error{background:var(--minus)}
+
+nav{display:flex;gap:4px;border-bottom:2px solid var(--line);margin-bottom:18px}
+.tab{border:0;background:none;padding:10px 14px;font-weight:600;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-2px}
+.tab.on{color:var(--ink);border-bottom-color:var(--vis)}
+
+/* Generic */
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.spread{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.muted{color:var(--muted)}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:9px 14px;font-weight:600;font-size:15px}
+.btn.primary{background:var(--ink);color:var(--card);border-color:var(--ink)}
+.btn.vis{background:var(--vis);color:var(--vis-ink);border-color:var(--vis)}
+.btn.danger{color:var(--minus);border-color:var(--minus);background:transparent}
+.btn.sm{padding:6px 10px;font-size:14px}
+.btn.ghost{border-color:transparent;background:transparent}
+.x{border:0;background:transparent;color:var(--muted);font-size:20px;line-height:1;padding:2px 8px;border-radius:6px}
+.x:hover{color:var(--minus);background:var(--soft)}
+.badge{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.badge.skilled{color:var(--steel);border-color:var(--steel)}
+.plus{color:var(--plus)} .minus{color:var(--minus)}
+.empty{text-align:center;padding:28px 12px;color:var(--muted)}
+
+/* Week header with the hi-vis net tag */
+.weekhead{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end;margin-bottom:14px}
+.weekhead h2{font-size:28px;line-height:1.1}
+.tag{position:relative;background:var(--vis);color:var(--vis-ink);border-radius:10px;padding:14px 18px 14px 26px;overflow:hidden;margin-bottom:16px;display:grid;grid-template-columns:1fr auto;gap:8px 16px;align-items:center}
+.tag::before{content:"";position:absolute;left:0;top:0;bottom:0;width:12px;background:repeating-linear-gradient(-45deg,var(--vis-ink) 0 6px,var(--vis) 6px 12px)}
+.tag .big{font-family:"Barlow Condensed",sans-serif;font-size:44px;font-weight:700;line-height:1}
+.tag .lbl{font-weight:600}
+.tag .breakdown{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px 22px;font-size:15px;border-top:1px solid rgba(31,42,51,.25);padding-top:8px}
+.tag .breakdown b{font-variant-numeric:tabular-nums}
+
+/* Day strip */
+.days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-bottom:12px}
+.day{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:8px 4px;text-align:center}
+.day .d1{font-size:13px;color:var(--muted)}
+.day .d2{font-family:"Barlow Condensed",sans-serif;font-size:22px;font-weight:700;line-height:1.1}
+.day .d3{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.day.sel{border-color:var(--ink);box-shadow:inset 0 -4px 0 var(--vis)}
+.day.today .d1{color:var(--ink);font-weight:600}
+
+/* Attendance */
+.att{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.att:first-child{border-top:0}
+.who b{display:block}
+.who .meta{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--muted)}
+.ratebtn{border:0;background:none;padding:0;color:var(--muted);text-decoration:underline dotted;font-size:14px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:var(--card);padding:7px 10px;font-size:14px;font-weight:600;color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--ink);color:var(--card)}
+.seg button.on.half{background:var(--steel)}
+.amt{min-width:92px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+
+.daytot{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;background:var(--soft);border-radius:8px;padding:10px 12px;margin-top:12px}
+.daytot div{font-size:13px;color:var(--muted)}
+.daytot b{display:block;font-size:17px;color:var(--ink);font-variant-numeric:tabular-nums}
+
+.entries{margin-top:12px}
+.entry{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;padding:8px 0;border-top:1px dashed var(--line);font-size:15px}
+.kind{font-size:12px;font-weight:700;padding:2px 7px;border-radius:5px}
+.kind.ca{background:rgba(194,65,45,.12);color:var(--minus)}
+.kind.it{background:rgba(62,85,102,.14);color:var(--steel)}
+
+/* Tables */
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th,td{padding:9px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
+th{font-weight:600;color:var(--muted);font-size:14px}
+th:first-child,td:first-child{text-align:left}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--soft)}
+tfoot td{font-weight:700;border-bottom:0}
+
+/* Workers */
+.wk{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.wk:first-child{border-top:0}
+.wk .rate{font-weight:700;font-variant-numeric:tabular-nums}
+
+/* History */
+.hist{border-top:1px solid var(--line);padding:12px 0}
+.hist:first-child{border-top:0}
+.hist-head{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;width:100%;border:0;background:none;text-align:left;padding:0}
+.hist-head h3{font-size:20px}
+.hist-body{margin-top:12px}
+
+/* Modal */
+#modalWrap{position:fixed;inset:0;background:rgba(10,14,18,.55);display:none;align-items:flex-end;justify-content:center;z-index:50;padding:12px}
+#modalWrap.open{display:flex}
+.modal{background:var(--card);border-radius:14px;width:100%;max-width:520px;max-height:92vh;overflow:auto;padding:18px 18px calc(18px + env(safe-area-inset-bottom,0px))}
+@media (min-width:640px){#modalWrap{align-items:center}}
+.modal h3{font-size:24px;margin-bottom:12px}
+.field{display:block;margin-bottom:12px}
+.field span{display:block;font-size:14px;font-weight:600;margin-bottom:4px}
+.field input,.field select,.field textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.field textarea{min-height:120px;font-family:ui-monospace,monospace;font-size:13px}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}
+.check{display:flex;gap:8px;align-items:center;font-size:15px;margin-bottom:12px}
+.code{font-family:"Barlow Condensed",sans-serif;font-size:30px;font-weight:700;letter-spacing:3px;background:var(--soft);border-radius:8px;padding:8px 14px;display:inline-block}
+details{background:var(--soft);border-radius:8px;padding:10px 12px;margin-bottom:14px}
+details summary{font-weight:600;cursor:pointer}
+details ol{padding-left:20px;margin:10px 0 0}
+details li{margin-bottom:8px}
+pre.rule{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px;overflow-x:auto}
+.slip-total{display:flex;justify-content:space-between;font-size:20px;font-weight:700;border-top:2px solid var(--ink);padding-top:8px;margin-top:8px}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--card);padding:10px 16px;border-radius:8px;font-weight:600;z-index:60;display:none}
+
+@media (max-width:640px){
+  .days{gap:4px}
+  .day .d3{display:none}
+  .att{grid-template-columns:1fr auto}
+  .att .amt{grid-column:1/-1;text-align:left;min-width:0;font-size:14px;color:var(--muted)}
+  .daytot{grid-template-columns:repeat(2,1fr)}
+  .tag .big{font-size:36px}
+  .weekhead{grid-template-columns:1fr}
+}
+@media print{
+  body{background:#fff;color:#000}
+  .wrap,.toast{display:none!important}
+  #modalWrap{position:static;display:block;background:none;padding:0}
+  .modal{max-height:none;box-shadow:none}
+  .modal-actions{display:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><h1>CrewPay</h1><small>Weekly payroll</small></div>
+    <button class="syncbtn" onclick="openSync()"><span class="dot" id="syncDot"></span><span id="syncText">Local only</span></button>
+  </header>
+  <nav>
+    <button class="tab" data-v="week" onclick="go('week')">This week</button>
+    <button class="tab" data-v="workers" onclick="go('workers')">Workers</button>
+    <button class="tab" data-v="history" onclick="go('history')">History</button>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="modalWrap" onclick="if(event.target===this)closeModal()"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- Storage keys and helpers ---------- */
+const LS_KEY = 'crewpay_state_v1';
+const LS_CFG = 'crewpay_fb_config';
+const LS_CODE = 'crewpay_sync_code';
+const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
+const COLLECTION = 'payroll';
+
+const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toISO(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function parseISO(s){ const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
+function addDays(s, n){ const d = parseISO(s); d.setDate(d.getDate()+n); return toISO(d); }
+const todayISO = () => toISO(new Date());
+const fmt = (s, o) => parseISO(s).toLocaleDateString('en-PH', o || {month:'short', day:'numeric'});
+const weekDates = w => Array.from({length:7}, (_, i) => addDays(w.start, i));
+const weekLabel = w => `${fmt(w.start)} to ${fmt(addDays(w.start, 6), {month:'short', day:'numeric', year:'numeric'})}`;
+const daysTxt = n => (n % 1 ? n.toFixed(1) : n) + (n === 1 ? ' day' : ' days');
+
+/* ---------- State ---------- */
+const blank = () => ({workers: [], week: null, history: [], updatedAt: 0});
+let state = load();
+let view = 'week', selDay = null, openHist = null;
+
+function load(){
+  try { const s = JSON.parse(localStorage.getItem(LS_KEY)); if (s && Array.isArray(s.workers)) return s; } catch(e){}
+  return blank();
+}
+function save(msg){
+  state.updatedAt = Date.now();
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch(e){}
+  pushRemote();
+  render();
+  if (msg) toast(msg);
+}
+function toast(t){
+  const el = document.getElementById('toast');
+  el.textContent = t; el.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(() => el.style.display = 'none', 1800);
+}
+
+/* ---------- Calculations ---------- */
+function calc(week){
+  const dates = weekDates(week);
+  const perWorker = {}, perDay = {};
+  dates.forEach(d => perDay[d] = {gross:0, ca:0, items:0, net:0, heads:0});
+  const ensure = wid => perWorker[wid] || (perWorker[wid] = {days:0, gross:0, ca:0, items:0, net:0});
+  for (const d of dates){
+    const att = (week.attendance || {})[d] || {};
+    for (const wid in att){
+      const a = att[wid];
+      if (!a || !a.d) continue;
+      const p = ensure(wid), amt = a.d * a.rate;
+      p.days += a.d; p.gross += amt;
+      perDay[d].gross += amt; perDay[d].heads += a.d;
+    }
+  }
+  (week.advances || []).forEach(x => { ensure(x.wid).ca += x.amount; if (perDay[x.date]) perDay[x.date].ca += x.amount; });
+  (week.items || []).forEach(x => { ensure(x.wid).items += x.price; if (perDay[x.date]) perDay[x.date].items += x.price; });
+  const tot = {gross:0, ca:0, items:0, net:0, days:0};
+  for (const wid in perWorker){
+    const p = perWorker[wid];
+    p.net = p.gross - p.ca - p.items;
+    tot.gross += p.gross; tot.ca += p.ca; tot.items += p.items; tot.days += p.days;
+  }
+  tot.net = tot.gross - tot.ca - tot.items;
+  for (const d in perDay){ const x = perDay[d]; x.net = x.gross - x.ca - x.items; }
+  return {perWorker, perDay, tot, dates};
+}
+const findWorker = wid => state.workers.find(w => w.id === wid);
+function workerInfo(wid, week){
+  const r = week && week.roster && week.roster[wid];
+  const w = findWorker(wid);
+  return r || (w ? {name: w.name, type: w.type} : {name: 'Removed worker', type: ''});
+}
+const typeBadge = t => t ? `<span class="badge ${t === 'Skilled' ? 'skilled' : ''}">${esc(t)}</span>` : '';
+
+/* ---------- Render ---------- */
+function go(v){ view = v; render(); window.scrollTo(0, 0); }
+function render(){
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+  const m = document.getElementById('main');
+  m.innerHTML = view === 'week' ? renderWeek() : view === 'workers' ? renderWorkers() : renderHistory();
+}
+
+function nextStart(){
+  if (state.history.length) return addDays(state.history[0].start, 7);
+  return todayISO();
+}
+
+function renderStart(){
+  const noWorkers = !state.workers.some(w => w.active !== false);
+  return `<div class="panel">
+    <h2 style="font-size:26px;margin-bottom:6px">Start a payroll week</h2>
+    <p class="muted" style="margin-top:0">Pick the first day. The week covers 7 days from that date, and pay is computed when you close it.</p>
+    ${noWorkers ? `<p>You have no workers yet. <button class="btn sm" onclick="go('workers')">Add workers</button></p>` : ''}
+    <div class="row">
+      <label class="field" style="margin:0;max-width:220px"><span>First day</span><input type="date" id="startDate" value="${nextStart()}"></label>
+      <button class="btn vis" style="align-self:flex-end" onclick="startWeek()">Start week</button>
+    </div>
+  </div>`;
+}
+
+function renderWeek(){
+  const w = state.week;
+  if (!w) return renderStart();
+  const c = calc(w);
+  if (!selDay || !c.dates.includes(selDay)) selDay = c.dates.includes(todayISO()) ? todayISO() : w.start;
+  const day = c.perDay[selDay];
+  const att = w.attendance[selDay] || {};
+  const shown = state.workers.filter(x => x.active !== false || (att[x.id] && att[x.id].d));
+  const t = c.tot;
+
+  const strip = c.dates.map(d => `
+    <button class="day ${d === selDay ? 'sel' : ''} ${d === todayISO() ? 'today' : ''}" onclick="selDay='${d}';render()">
+      <div class="d1">${fmt(d, {weekday:'short'})}</div>
+      <div class="d2">${parseISO(d).getDate()}</div>
+      <div class="d3">${c.perDay[d].gross ? peso(c.perDay[d].gross).replace('.00','') : '&nbsp;'}</div>
+    </button>`).join('');
+
+  const rows = shown.length ? shown.map(x => {
+    const a = att[x.id];
+    const v = a ? a.d : 0;
+    const rate = a ? a.rate : x.rate;
+    return `<div class="att">
+      <div class="who"><b>${esc(x.name)}</b>
+        <div class="meta">${typeBadge(x.type)}<button class="ratebtn" onclick="editDayRate('${x.id}')" title="Change rate for this day only">${peso(rate)}/day</button></div>
+      </div>
+      <div class="seg" role="group" aria-label="Attendance for ${esc(x.name)}">
+        <button class="${v === 0 ? 'on' : ''}" onclick="setAtt('${x.id}',0)">Absent</button>
+        <button class="${v === 0.5 ? 'on half' : ''}" onclick="setAtt('${x.id}',0.5)">Half</button>
+        <button class="${v === 1 ? 'on' : ''}" onclick="setAtt('${x.id}',1)">Full</button>
+      </div>
+      <div class="amt">${v ? peso(v * rate) : '<span class="muted">No pay</span>'}</div>
+    </div>`;
+  }).join('') : `<div class="empty">No workers yet. <button class="btn sm" onclick="go('workers')">Add workers</button></div>`;
+
+  const dayEntries = [
+    ...w.advances.filter(x => x.date === selDay).map(x => ({...x, k:'ca'})),
+    ...w.items.filter(x => x.date === selDay).map(x => ({...x, k:'it'}))
+  ];
+  const entries = dayEntries.length ? dayEntries.map(x => `
+    <div class="entry">
+      <span class="kind ${x.k}">${x.k === 'ca' ? 'Cash advance' : 'Item'}</span>
+      <span><b>${esc(workerInfo(x.wid, w).name)}</b>${x.k === 'it' ? ` bought ${esc(x.name)}` : (x.note ? ` <span class="muted">(${esc(x.note)})</span>` : '')}</span>
+      <span class="num minus">${peso(x.k === 'ca' ? x.amount : x.price)}</span>
+      <button class="x" aria-label="Delete entry" onclick="delEntry('${x.k}','${x.id}')">×</button>
+    </div>`).join('') : '';
+
+  const wids = Object.keys(c.perWorker);
+  const table = wids.length ? `<div class="tablewrap"><table>
+    <thead><tr><th>Worker</th><th>Days</th><th>Gross</th><th>Cash adv.</th><th>Items</th><th>Net pay</th></tr></thead>
+    <tbody>${wids.map(id => { const p = c.perWorker[id], i = workerInfo(id, w); return `
+      <tr class="click" onclick="payslip('${id}')"><td>${esc(i.name)} ${typeBadge(i.type)}</td><td>${p.days % 1 ? p.days.toFixed(1) : p.days}</td><td>${peso(p.gross)}</td><td class="minus">${peso(p.ca)}</td><td class="minus">${peso(p.items)}</td><td><b class="${p.net < 0 ? 'minus' : ''}">${peso(p.net)}</b></td></tr>`; }).join('')}</tbody>
+    <tfoot><tr><td>Total</td><td>${t.days % 1 ? t.days.toFixed(1) : t.days}</td><td>${peso(t.gross)}</td><td class="minus">${peso(t.ca)}</td><td class="minus">${peso(t.items)}</td><td>${peso(t.net)}</td></tr></tfoot>
+  </table></div><p class="muted" style="font-size:14px;margin:8px 0 0">Tap a worker to see or print their payslip.</p>` : `<div class="empty">Mark attendance or add an entry to see this week's pay.</div>`;
+
+  return `
+  <div class="weekhead">
+    <div><div class="muted">Current week</div><h2>${weekLabel(w)}</h2></div>
+    <button class="btn" onclick="closeWeek()">Close week and save</button>
+  </div>
+  <div class="tag">
+    <div><div class="lbl">Net payable this week</div><div class="big num">${peso(t.net)}</div></div>
+    <div class="lbl" style="text-align:right">${daysTxt(t.days)} worked</div>
+    <div class="breakdown">
+      <span>Gross salary <b>${peso(t.gross)}</b></span>
+      <span>Cash advances <b>${peso(t.ca)}</b></span>
+      <span>Items bought <b>${peso(t.items)}</b></span>
+    </div>
+  </div>
+
+  <div class="days">${strip}</div>
+
+  <div class="panel">
+    <div class="spread" style="margin-bottom:6px">
+      <h3 style="font-size:22px">${fmt(selDay, {weekday:'long', month:'long', day:'numeric'})}</h3>
+      <div class="row">
+        <button class="btn sm" onclick="markAll()">Mark all full day</button>
+      </div>
+    </div>
+    ${rows}
+    <div class="daytot">
+      <div>Salary<b>${peso(day.gross)}</b></div>
+      <div>Cash advances<b class="minus">${peso(day.ca)}</b></div>
+      <div>Items<b class="minus">${peso(day.items)}</b></div>
+      <div>Net for the day<b>${peso(day.net)}</b></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn sm" onclick="entryForm('ca')">Add cash advance</button>
+      <button class="btn sm" onclick="entryForm('it')">Add item bought</button>
+    </div>
+    <div class="entries">${entries}</div>
+  </div>
+
+  <div class="panel">
+    <h3 style="font-size:22px;margin-bottom:8px">Weekly pay per worker</h3>
+    ${table}
+  </div>`;
+}
+
+function renderWorkers(){
+  const active = state.workers.filter(w => w.active !== false);
+  const removed = state.workers.filter(w => w.active === false);
+  const list = arr => arr.map(w => `
+    <div class="wk">
+      <div><b>${esc(w.name)}</b><div class="row" style="gap:8px;margin-top:2px">${typeBadge(w.type)}</div></div>
+      <div class="rate">${peso(w.rate)}<span class="muted" style="font-weight:400">/day</span></div>
+      <div class="row" style="gap:4px">
+        ${w.active === false
+          ? `<button class="btn sm" onclick="restoreWorker('${w.id}')">Restore</button>`
+          : `<button class="btn sm" onclick="workerForm('${w.id}')">Edit</button><button class="btn sm ghost minus" onclick="removeWorker('${w.id}')">Remove</button>`}
+      </div>
+    </div>`).join('');
+  const skilled = active.filter(w => w.type === 'Skilled').length;
+  return `<div class="panel">
+    <div class="spread" style="margin-bottom:8px">
+      <div><h2 style="font-size:26px">Workers</h2><div class="muted">${active.length} active, ${skilled} skilled and ${active.length - skilled} laborers</div></div>
+      <button class="btn vis" onclick="workerForm()">Add worker</button>
+    </div>
+    ${active.length ? list(active) : '<div class="empty">Add your first worker to start tracking attendance.</div>'}
+  </div>
+  ${removed.length ? `<div class="panel"><h3 style="font-size:20px;margin-bottom:6px">Removed workers</h3><p class="muted" style="margin-top:0;font-size:14px">Kept so their past payslips stay intact.</p>${list(removed)}</div>` : ''}`;
+}
+
+function renderHistory(){
+  if (!state.history.length) return `<div class="panel"><div class="empty">Closed weeks show up here. Close the current week from the This week tab.</div></div>`;
+  return `<div class="panel">${state.history.map(h => {
+    const c = calc(h), t = c.tot, open = openHist === h.id;
+    const wids = Object.keys(c.perWorker);
+    return `<div class="hist">
+      <button class="hist-head" onclick="openHist=${open ? 'null' : `'${h.id}'`};render()" aria-expanded="${open}">
+        <div><h3>${weekLabel(h)}</h3><div class="muted" style="font-size:14px">${wids.length} workers, ${daysTxt(t.days)}, gross ${peso(t.gross)}</div></div>
+        <div style="text-align:right"><div class="muted" style="font-size:13px">Net paid</div><b class="num" style="font-size:18px">${peso(t.net)}</b></div>
+      </button>
+      ${open ? `<div class="hist-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Worker</th><th>Days</th><th>Gross</th><th>Cash adv.</th><th>Items</th><th>Net pay</th></tr></thead>
+          <tbody>${wids.map(id => { const p = c.perWorker[id], i = workerInfo(id, h); return `
+            <tr class="click" onclick="payslip('${id}','${h.id}')"><td>${esc(i.name)} ${typeBadge(i.type)}</td><td>${p.days}</td><td>${peso(p.gross)}</td><td class="minus">${peso(p.ca)}</td><td class="minus">${peso(p.items)}</td><td><b>${peso(p.net)}</b></td></tr>`; }).join('')}</tbody>
+          <tfoot><tr><td>Total</td><td>${t.days}</td><td>${peso(t.gross)}</td><td class="minus">${peso(t.ca)}</td><td class="minus">${peso(t.items)}</td><td>${peso(t.net)}</td></tr></tfoot>
+        </table></div>
+        <div class="row" style="margin-top:12px">
+          ${state.week ? '' : `<button class="btn sm" onclick="reopenWeek('${h.id}')">Reopen to edit</button>`}
+          <button class="btn sm danger" onclick="deleteHistory('${h.id}')">Delete week</button>
+        </div>
+      </div>` : ''}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+/* ---------- Week actions ---------- */
+function startWeek(){
+  const start = document.getElementById('startDate').value;
+  if (!start) return toast('Pick the first day of the week');
+  state.week = {id: uid(), start, attendance: {}, advances: [], items: []};
+  selDay = start;
+  save('Week started');
+}
+function setAtt(wid, v){
+  const w = state.week, worker = findWorker(wid);
+  w.attendance[selDay] = w.attendance[selDay] || {};
+  const cur = w.attendance[selDay][wid];
+  w.attendance[selDay][wid] = {d: v, rate: cur ? cur.rate : worker.rate};
+  save();
+}
+function markAll(){
+  const w = state.week;
+  w.attendance[selDay] = w.attendance[selDay] || {};
+  state.workers.filter(x => x.active !== false).forEach(x => {
+    const cur = w.attendance[selDay][x.id];
+    w.attendance[selDay][x.id] = {d: 1, rate: cur ? cur.rate : x.rate};
+  });
+  save('Everyone marked full day');
+}
+function editDayRate(wid){
+  const w = state.week, worker = findWorker(wid);
+  const cur = (w.attendance[selDay] || {})[wid];
+  const val = prompt(`Daily rate for ${worker.name} on ${fmt(selDay)} only:`, cur ? cur.rate : worker.rate);
+  if (val === null) return;
+  const rate = parseFloat(val);
+  if (!(rate >= 0)) return toast('Enter a valid amount');
+  w.attendance[selDay] = w.attendance[selDay] || {};
+  w.attendance[selDay][wid] = {d: cur ? cur.d : 0, rate};
+  save('Rate updated for this day');
+}
+function entryForm(kind){
+  const w = state.week;
+  const workers = state.workers.filter(x => x.active !== false);
+  if (!workers.length) return toast('Add a worker first');
+  const isCA = kind === 'ca';
+  openModal(`<h3>${isCA ? 'Add cash advance' : 'Add item bought'}</h3>
+    <label class="field"><span>Worker</span><select id="f_wid">${workers.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
+    <label class="field"><span>Date</span><select id="f_date">${weekDates(w).map(d => `<option value="${d}" ${d === selDay ? 'selected' : ''}>${fmt(d, {weekday:'short', month:'short', day:'numeric'})}</option>`).join('')}</select></label>
+    ${isCA ? '' : `<label class="field"><span>Item name</span><input id="f_name" placeholder="e.g. Rice 5kg"></label>`}
+    <label class="field"><span>${isCA ? 'Amount' : 'Price'} (₱)</span><input id="f_amt" type="number" inputmode="decimal" min="0" step="0.01"></label>
+    ${isCA ? `<label class="field"><span>Note (optional)</span><input id="f_note" placeholder="e.g. For fare"></label>` : ''}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveEntry('${kind}')">${isCA ? 'Add cash advance' : 'Add item'}</button></div>`);
+  setTimeout(() => document.getElementById(isCA ? 'f_amt' : 'f_name').focus(), 50);
+}
+function saveEntry(kind){
+  const wid = val('f_wid'), date = val('f_date'), amt = parseFloat(val('f_amt'));
+  if (!(amt > 0)) return toast('Enter an amount above zero');
+  if (kind === 'ca'){
+    state.week.advances.push({id: uid(), wid, date, amount: amt, note: val('f_note').trim()});
+  } else {
+    const name = val('f_name').trim();
+    if (!name) return toast('Enter the item name');
+    state.week.items.push({id: uid(), wid, date, name, price: amt});
+  }
+  selDay = date;
+  closeModal();
+  save(kind === 'ca' ? 'Cash advance added' : 'Item added');
+}
+function delEntry(kind, id){
+  if (!confirm('Delete this entry?')) return;
+  const key = kind === 'ca' ? 'advances' : 'items';
+  state.week[key] = state.week[key].filter(x => x.id !== id);
+  save('Entry deleted');
+}
+function snapshotRoster(week){
+  const roster = {...(week.roster || {})};
+  const ids = new Set([...Object.values(week.attendance).flatMap(Object.keys), ...week.advances.map(x => x.wid), ...week.items.map(x => x.wid)]);
+  ids.forEach(id => { const w = findWorker(id); if (w) roster[id] = {name: w.name, type: w.type}; });
+  return roster;
+}
+function closeWeek(){
+  const w = state.week, c = calc(w);
+  if (!confirm(`Close ${weekLabel(w)}?\n\nNet payable: ${peso(c.tot.net)}\n\nIt will be saved to History and you can start the next week.`)) return;
+  state.history.unshift({...w, roster: snapshotRoster(w), closedAt: Date.now()});
+  state.history.sort((a, b) => b.start.localeCompare(a.start));
+  state.week = null; selDay = null;
+  save('Week saved to history');
+}
+function reopenWeek(id){
+  if (state.week) return toast('Close the current week first');
+  if (!confirm('Reopen this week for editing? It moves back to This week until you close it again.')) return;
+  const h = state.history.find(x => x.id === id);
+  state.history = state.history.filter(x => x.id !== id);
+  const {closedAt, ...week} = h;
+  state.week = week; selDay = week.start; view = 'week';
+  save('Week reopened');
+}
+function deleteHistory(id){
+  if (!confirm('Delete this week from history? This cannot be undone.')) return;
+  state.history = state.history.filter(x => x.id !== id);
+  openHist = null;
+  save('Week deleted');
+}
+
+/* ---------- Payslip ---------- */
+function payslip(wid, histId){
+  const week = histId ? state.history.find(h => h.id === histId) : state.week;
+  const c = calc(week), p = c.perWorker[wid], info = workerInfo(wid, week);
+  const dayRows = c.dates.map(d => {
+    const a = (week.attendance[d] || {})[wid];
+    if (!a || !a.d) return '';
+    return `<tr><td>${fmt(d, {weekday:'short', month:'short', day:'numeric'})}</td><td>${a.d === 1 ? 'Full' : 'Half'}</td><td>${peso(a.rate)}</td><td>${peso(a.d * a.rate)}</td></tr>`;
+  }).join('');
+  const ca = week.advances.filter(x => x.wid === wid);
+  const it = week.items.filter(x => x.wid === wid);
+  openModal(`<h3>Payslip</h3>
+    <div class="spread"><div><b style="font-size:18px">${esc(info.name)}</b> ${typeBadge(info.type)}</div><div class="muted">${weekLabel(week)}</div></div>
+    <div class="tablewrap" style="margin-top:10px"><table>
+      <thead><tr><th>Day</th><th>Attendance</th><th>Rate</th><th>Amount</th></tr></thead>
+      <tbody>${dayRows || '<tr><td colspan="4" class="muted">No days worked</td></tr>'}</tbody>
+      <tfoot><tr><td>Gross salary</td><td>${daysTxt(p.days)}</td><td></td><td class="plus">${peso(p.gross)}</td></tr></tfoot>
+    </table></div>
+    ${ca.length ? `<h4 style="margin:14px 0 4px">Cash advances</h4><table><tbody>${ca.map(x => `<tr><td>${fmt(x.date)}${x.note ? ` <span class="muted">${esc(x.note)}</span>` : ''}</td><td class="minus">${peso(x.amount)}</td></tr>`).join('')}</tbody></table>` : ''}
+    ${it.length ? `<h4 style="margin:14px 0 4px">Items bought</h4><table><tbody>${it.map(x => `<tr><td>${fmt(x.date)} ${esc(x.name)}</td><td class="minus">${peso(x.price)}</td></tr>`).join('')}</tbody></table>` : ''}
+    <div style="margin-top:12px">
+      <div class="spread"><span>Gross salary</span><b class="num">${peso(p.gross)}</b></div>
+      <div class="spread"><span>Less cash advances</span><b class="num minus">${peso(p.ca)}</b></div>
+      <div class="spread"><span>Less items bought</span><b class="num minus">${peso(p.items)}</b></div>
+      <div class="slip-total"><span>Net pay</span><span class="num">${peso(p.net)}</span></div>
+    </div>
+    <div class="modal-actions" style="margin-top:14px"><button class="btn" onclick="window.print()">Print</button><button class="btn primary" onclick="closeModal()">Done</button></div>`);
+}
+
+/* ---------- Workers ---------- */
+function workerForm(id){
+  const w = id ? findWorker(id) : {name:'', type:'Laborer', rate:''};
+  openModal(`<h3>${id ? 'Edit worker' : 'Add worker'}</h3>
+    <label class="field"><span>Name</span><input id="f_name" value="${esc(w.name)}" placeholder="Full name"></label>
+    <label class="field"><span>Type</span><select id="f_type">
+      <option ${w.type === 'Laborer' ? 'selected' : ''}>Laborer</option>
+      <option ${w.type === 'Skilled' ? 'selected' : ''}>Skilled</option>
+    </select></label>
+    <label class="field"><span>Daily rate (₱)</span><input id="f_rate" type="number" inputmode="decimal" min="0" step="0.01" value="${w.rate}"></label>
+    ${id && state.week ? `<label class="check"><input type="checkbox" id="f_apply" checked> Also apply the new rate to days already marked this week</label>` : ''}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveWorker('${id || ''}')">${id ? 'Save changes' : 'Add worker'}</button></div>`);
+  setTimeout(() => document.getElementById('f_name').focus(), 50);
+}
+function saveWorker(id){
+  const name = val('f_name').trim(), type = val('f_type'), rate = parseFloat(val('f_rate'));
+  if (!name) return toast('Enter a name');
+  if (!(rate >= 0)) return toast('Enter the daily rate');
+  if (id){
+    const w = findWorker(id);
+    const applyEl = document.getElementById('f_apply');
+    if (applyEl && applyEl.checked && state.week){
+      Object.values(state.week.attendance).forEach(day => { if (day[id]) day[id].rate = rate; });
+    }
+    Object.assign(w, {name, type, rate});
+  } else {
+    state.workers.push({id: uid(), name, type, rate, active: true});
+  }
+  closeModal();
+  save(id ? 'Changes saved' : 'Worker added');
+}
+function removeWorker(id){
+  const w = findWorker(id);
+  if (!confirm(`Remove ${w.name}? Their past payslips stay in History, and you can restore them later.`)) return;
+  w.active = false;
+  save('Worker removed');
+}
+function restoreWorker(id){ findWorker(id).active = true; save('Worker restored'); }
+
+/* ---------- Modal ---------- */
+const val = id => (document.getElementById(id) || {}).value || '';
+function openModal(html){ document.getElementById('modal').innerHTML = html; document.getElementById('modalWrap').classList.add('open'); }
+function closeModal(){ document.getElementById('modalWrap').classList.remove('open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+/* ---------- Firebase sync ---------- */
+let db = null, unsub = null, pushTimer = null, syncStatus = 'local', syncErr = '';
+function setSync(s, err){
+  syncStatus = s; syncErr = err || '';
+  document.getElementById('syncDot').className = 'dot ' + s;
+  document.getElementById('syncText').textContent = {local:'Local only', connecting:'Connecting', synced:'Synced', error:'Sync error'}[s];
+}
+function loadScript(src){ return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Could not load Firebase. Check your internet connection.')); document.head.appendChild(s); }); }
+function parseConfig(t){
+  t = t.trim().replace(/^[^{]*/, '').replace(/;?\s*$/, '');
+  try { return JSON.parse(t); } catch(e){}
+  return (new Function('return (' + t + ')'))();
+}
+const genCode = () => Array.from({length:8}, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
+
+async function initFirebase(){
+  const cfgTxt = localStorage.getItem(LS_CFG);
+  if (!cfgTxt){ setSync('local'); return; }
+  let cfg;
+  try { cfg = parseConfig(cfgTxt); if (!cfg.projectId) throw new Error(); }
+  catch(e){ setSync('error', 'The saved Firebase config is not valid. Paste it again.'); return; }
+  setSync('connecting');
+  try {
+    if (!window.firebase){ await loadScript(FB + 'firebase-app-compat.js'); await loadScript(FB + 'firebase-firestore-compat.js'); }
+    if (!firebase.apps.length) firebase.initializeApp(cfg);
+    db = firebase.firestore();
+    let code = localStorage.getItem(LS_CODE);
+    if (!code){ code = genCode(); localStorage.setItem(LS_CODE, code); }
+    subscribe(code);
+  } catch(e){ console.error(e); setSync('error', e.message); }
+}
+function subscribe(code){
+  if (unsub) unsub();
+  unsub = db.collection(COLLECTION).doc(code).onSnapshot(snap => {
+    if (snap.metadata.hasPendingWrites) return;
+    setSync('synced');
+    if (!snap.exists){ pushNow(); return; }
+    let remote;
+    try { remote = JSON.parse(snap.data().json); } catch(e){ return; }
+    if ((remote.updatedAt || 0) > (state.updatedAt || 0)){
+      state = remote;
+      localStorage.setItem(LS_KEY, JSON.stringify(state));
+      render();
+    } else if ((remote.updatedAt || 0) < (state.updatedAt || 0)){
+      pushNow();
+    }
+  }, err => setSync('error', err.message.includes('permission') ? 'Firestore blocked access. Check your database rules (step 6).' : err.message));
+}
+function pushRemote(){ if (!db) return; clearTimeout(pushTimer); pushTimer = setTimeout(pushNow, 400); }
+function pushNow(){
+  if (!db) return;
+  const code = localStorage.getItem(LS_CODE);
+  db.collection(COLLECTION).doc(code).set({json: JSON.stringify(state), updatedAt: state.updatedAt})
+    .then(() => setSync('synced'))
+    .catch(e => setSync('error', e.message));
+}
+
+function openSync(){
+  const code = localStorage.getItem(LS_CODE);
+  const hasCfg = !!localStorage.getItem(LS_CFG);
+  openModal(`<h3>Sync across devices</h3>
+    <p style="margin-top:0"><span class="dot ${syncStatus}" style="display:inline-block"></span> ${{local:'Data is saved on this device only.', connecting:'Connecting to Firebase.', synced:'Connected. Changes sync to every device using the same code.', error:'Sync error: ' + esc(syncErr)}[syncStatus]}</p>
+    <details ${hasCfg ? '' : 'open'}><summary>How to set up Firebase (one time)</summary><ol>
+      <li>Go to console.firebase.google.com. You can reuse your PayTrack project, or click Add project to make a new one.</li>
+      <li>Open Build, then Firestore Database. If it is not created yet, click Create database and start in test mode.</li>
+      <li>Open Project settings (gear icon). Under Your apps, register a Web app (the &lt;/&gt; icon) if you don't have one.</li>
+      <li>Copy the firebaseConfig object, the part inside the curly braces.</li>
+      <li>Paste it in box 1 below and tap Save and connect.</li>
+      <li>In Firestore Database, open Rules and make sure the payroll collection is allowed. If you reuse PayTrack's project, add the payroll block next to your paytrack block:
+        <pre class="rule">match /payroll/{document=**} {
+  allow read, write: if true;
+}</pre></li>
+      <li>On your other devices, open the same site, paste the same config, then enter this device's sync code in box 2.</li>
+    </ol></details>
+    <label class="field"><span>1. Firebase config</span><textarea id="f_cfg" placeholder='{ apiKey: "...", authDomain: "...", projectId: "...", ... }'>${esc(localStorage.getItem(LS_CFG) || '')}</textarea></label>
+    <div class="row" style="margin-bottom:16px"><button class="btn primary" onclick="saveConfig()">Save and connect</button>${hasCfg ? '<button class="btn danger" onclick="disconnect()">Disconnect</button>' : ''}</div>
+    ${hasCfg ? `<div class="field"><span>2. Sync code</span>
+      <p class="muted" style="margin:0 0 6px;font-size:14px">This device's code. Enter it on your other devices to share the same payroll.</p>
+      <div class="row"><span class="code">${esc(code || '')}</span><button class="btn sm" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(code || '')}').then(()=>toast('Code copied'))">Copy</button></div>
+    </div>
+    <label class="field"><span>Have a code from another device?</span><input id="f_join" placeholder="e.g. K7M2Q9XA" style="text-transform:uppercase"></label>
+    <button class="btn" onclick="joinCode()">Use this code</button>` : ''}
+    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+    <div class="field"><span>Backup</span><div class="row"><button class="btn sm" onclick="exportData()">Download backup</button><label class="btn sm">Restore backup<input type="file" accept=".json" onchange="importData(this)" hidden></label></div></div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+}
+function saveConfig(){
+  const t = val('f_cfg').trim();
+  try { const c = parseConfig(t); if (!c.projectId || !c.apiKey) throw new Error(); }
+  catch(e){ return toast('That does not look like a Firebase config'); }
+  localStorage.setItem(LS_CFG, t);
+  toast('Saved. Connecting');
+  setTimeout(() => location.reload(), 600);
+}
+function joinCode(){
+  const code = val('f_join').trim().toUpperCase();
+  if (code.length < 6) return toast('Enter the full sync code');
+  if (!confirm('Use this code? The data on this device will be replaced by the data saved under that code.')) return;
+  localStorage.setItem(LS_CODE, code);
+  state = blank();
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+  render();
+  if (db) subscribe(code);
+  closeModal();
+  toast('Joined. Loading data');
+}
+function disconnect(){
+  if (!confirm('Disconnect sync on this device? Your data stays on this device.')) return;
+  localStorage.removeItem(LS_CFG);
+  location.reload();
+}
+function exportData(){
+  const blob = new Blob([JSON.stringify(state, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `crewpay-backup-${todayISO()}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function importData(input){
+  const f = input.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const s = JSON.parse(r.result);
+      if (!Array.isArray(s.workers)) throw new Error();
+      if (!confirm('Replace all current data with this backup?')) return;
+      state = s; closeModal(); save('Backup restored');
+    } catch(e){ toast('That file is not a CrewPay backup'); }
+  };
+  r.readAsText(f);
+}
+
+/* ---------- Boot ---------- */
+render();
+initFirebase();
+</script>
+</body>
+</html>
