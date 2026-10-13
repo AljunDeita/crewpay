@@ -129,6 +129,16 @@ tfoot td{font-weight:700;border-bottom:0}
 .hist-head h3{font-size:20px}
 .hist-body{margin-top:12px}
 
+/* Dashboard */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.stat .lbl{font-size:14px;font-weight:600;color:var(--muted)}
+.stat .val{font-family:"Barlow Condensed",sans-serif;font-size:32px;font-weight:700;line-height:1.1;color:var(--minus)}
+.stat.dark{background:var(--vis);border-color:var(--vis)}
+.stat.dark .lbl,.stat.dark .val{color:var(--vis-ink)}
+.adjust{background:var(--soft);border-radius:10px;padding:12px 14px;margin-top:14px}
+@media (max-width:640px){.stats{grid-template-columns:1fr}.stat .val{font-size:28px}}
+
 /* Modal */
 #modalWrap{position:fixed;inset:0;background:rgba(10,14,18,.55);display:none;align-items:flex-end;justify-content:center;z-index:50;padding:12px}
 #modalWrap.open{display:flex}
@@ -176,6 +186,7 @@ pre.rule{background:var(--card);border:1px solid var(--line);border-radius:6px;p
   </header>
   <nav>
     <button class="tab" data-v="week" onclick="go('week')">This week</button>
+    <button class="tab" data-v="dashboard" onclick="go('dashboard')">Dashboard</button>
     <button class="tab" data-v="workers" onclick="go('workers')">Workers</button>
     <button class="tab" data-v="history" onclick="go('history')">History</button>
   </nav>
@@ -228,11 +239,15 @@ function toast(t){
 }
 
 /* ---------- Calculations ---------- */
-function calc(week){
+const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+const isAmt = v => typeof v === 'number' && isFinite(v) && v >= 0;
+
+/* Pay earned and amounts given within one week. */
+function baseWeek(week){
   const dates = weekDates(week);
   const perWorker = {}, perDay = {};
   dates.forEach(d => perDay[d] = {gross:0, ca:0, items:0, net:0, heads:0});
-  const ensure = wid => perWorker[wid] || (perWorker[wid] = {days:0, gross:0, ca:0, items:0, net:0});
+  const ensure = wid => perWorker[wid] || (perWorker[wid] = {days:0, gross:0, caGiven:0, itemsGiven:0});
   for (const d of dates){
     const att = (week.attendance || {})[d] || {};
     for (const wid in att){
@@ -243,18 +258,59 @@ function calc(week){
       perDay[d].gross += amt; perDay[d].heads += a.d;
     }
   }
-  (week.advances || []).forEach(x => { ensure(x.wid).ca += x.amount; if (perDay[x.date]) perDay[x.date].ca += x.amount; });
-  (week.items || []).forEach(x => { ensure(x.wid).items += x.price; if (perDay[x.date]) perDay[x.date].items += x.price; });
-  const tot = {gross:0, ca:0, items:0, net:0, days:0};
-  for (const wid in perWorker){
-    const p = perWorker[wid];
-    p.net = p.gross - p.ca - p.items;
-    tot.gross += p.gross; tot.ca += p.ca; tot.items += p.items; tot.days += p.days;
-  }
-  tot.net = tot.gross - tot.ca - tot.items;
+  (week.advances || []).forEach(x => { ensure(x.wid).caGiven += x.amount; if (perDay[x.date]) perDay[x.date].ca += x.amount; });
+  (week.items || []).forEach(x => { ensure(x.wid).itemsGiven += x.price; if (perDay[x.date]) perDay[x.date].items += x.price; });
   for (const d in perDay){ const x = perDay[d]; x.net = x.gross - x.ca - x.items; }
-  return {perWorker, perDay, tot, dates};
+  return {perWorker, perDay, dates};
 }
+
+/* How much to deduct this week: the week's override, else the worker's setting,
+   else the full balance. Never more than the balance, and never more than the
+   worker earned that week (cash advance is deducted first). */
+function planDeduct(id, week, caOwed, itOwed, gross){
+  const worker = findWorker(id) || {};
+  const o = (week.override || {})[id] || {};
+  const caSet = isAmt(o.ca) ? o.ca : worker.caDeduct;
+  const itSet = isAmt(o.items) ? o.items : worker.itemDeduct;
+  let ca = Math.min(caOwed, isAmt(caSet) ? caSet : caOwed);
+  let it = Math.min(itOwed, isAmt(itSet) ? itSet : itOwed);
+  ca = Math.min(ca, gross);
+  it = Math.min(it, Math.max(0, gross - ca));
+  return {ca: r2(Math.max(0, ca)), items: r2(Math.max(0, it))};
+}
+
+/* Walks every week in date order so unpaid balances carry into the next week. */
+function ledger(){
+  const weeks = [...state.history, ...(state.week ? [state.week] : [])].sort((a, b) => a.start.localeCompare(b.start));
+  const bal = {}, out = {};
+  for (const w of weeks){
+    const base = baseWeek(w);
+    const ids = new Set([...Object.keys(base.perWorker), ...Object.keys(bal).filter(id => bal[id].ca > 0 || bal[id].items > 0)]);
+    const perWorker = {};
+    const tot = {gross:0, days:0, caGiven:0, itemsGiven:0, caDeduct:0, itemsDeduct:0, net:0};
+    for (const id of ids){
+      const b = bal[id] || (bal[id] = {ca:0, items:0});
+      const p = base.perWorker[id] || {days:0, gross:0, caGiven:0, itemsGiven:0};
+      const caPrev = b.ca, itPrev = b.items;
+      const caOwed = r2(caPrev + p.caGiven), itOwed = r2(itPrev + p.itemsGiven);
+      let d;
+      if (w.applied) d = w.applied[id] || {ca:0, items:0};                       // closed week: use what was actually deducted
+      else if (w.closedAt) d = {ca: p.caGiven, items: p.itemsGiven};              // weeks closed before carry-over existed
+      else d = planDeduct(id, w, caOwed, itOwed, p.gross);                       // current week: live
+      b.ca = r2(caOwed - d.ca); b.items = r2(itOwed - d.items);
+      const row = {...p, caPrev, itPrev, caOwed, itOwed, caDeduct: d.ca, itemsDeduct: d.items, caLeft: b.ca, itemsLeft: b.items, net: r2(p.gross - d.ca - d.items)};
+      perWorker[id] = row;
+      tot.gross += row.gross; tot.days += row.days; tot.caGiven += row.caGiven; tot.itemsGiven += row.itemsGiven;
+      tot.caDeduct += row.caDeduct; tot.itemsDeduct += row.itemsDeduct; tot.net += row.net;
+    }
+    out[w.id] = {perWorker, perDay: base.perDay, dates: base.dates, tot, week: w};
+  }
+  return {weeks: out, order: weeks, bal};
+}
+function calc(week){ return ledger().weeks[week.id]; }
+/* Workers worth listing for a week: anyone who worked, got something, or had something deducted. */
+const activeIds = c => Object.keys(c.perWorker).filter(id => { const p = c.perWorker[id]; return p.gross || p.caGiven || p.itemsGiven || p.caDeduct || p.itemsDeduct; });
+const dedTxt = w => `Weekly deduction: cash advance ${isAmt(w.caDeduct) ? peso(w.caDeduct) : 'full balance'}, items ${isAmt(w.itemDeduct) ? peso(w.itemDeduct) : 'full balance'}`;
 const findWorker = wid => state.workers.find(w => w.id === wid);
 function workerInfo(wid, week){
   const r = week && week.roster && week.roster[wid];
@@ -268,7 +324,7 @@ function go(v){ view = v; render(); window.scrollTo(0, 0); }
 function render(){
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.v === view));
   const m = document.getElementById('main');
-  m.innerHTML = view === 'week' ? renderWeek() : view === 'workers' ? renderWorkers() : renderHistory();
+  m.innerHTML = view === 'week' ? renderWeek() : view === 'dashboard' ? renderDashboard() : view === 'workers' ? renderWorkers() : renderHistory();
 }
 
 function nextStart(){
@@ -335,13 +391,13 @@ function renderWeek(){
       <button class="x" aria-label="Delete entry" onclick="delEntry('${x.k}','${x.id}')">×</button>
     </div>`).join('') : '';
 
-  const wids = Object.keys(c.perWorker);
+  const wids = activeIds(c);
   const table = wids.length ? `<div class="tablewrap"><table>
-    <thead><tr><th>Worker</th><th>Days</th><th>Gross</th><th>Cash adv.</th><th>Items</th><th>Net pay</th></tr></thead>
+    <thead><tr><th>Worker</th><th>Days</th><th>Gross</th><th>CA deducted</th><th>Items deducted</th><th>Net pay</th></tr></thead>
     <tbody>${wids.map(id => { const p = c.perWorker[id], i = workerInfo(id, w); return `
-      <tr class="click" onclick="payslip('${id}')"><td>${esc(i.name)} ${typeBadge(i.type)}</td><td>${p.days % 1 ? p.days.toFixed(1) : p.days}</td><td>${peso(p.gross)}</td><td class="minus">${peso(p.ca)}</td><td class="minus">${peso(p.items)}</td><td><b class="${p.net < 0 ? 'minus' : ''}">${peso(p.net)}</b></td></tr>`; }).join('')}</tbody>
-    <tfoot><tr><td>Total</td><td>${t.days % 1 ? t.days.toFixed(1) : t.days}</td><td>${peso(t.gross)}</td><td class="minus">${peso(t.ca)}</td><td class="minus">${peso(t.items)}</td><td>${peso(t.net)}</td></tr></tfoot>
-  </table></div><p class="muted" style="font-size:14px;margin:8px 0 0">Tap a worker to see or print their payslip.</p>` : `<div class="empty">Mark attendance or add an entry to see this week's pay.</div>`;
+      <tr class="click" onclick="payslip('${id}')"><td>${esc(i.name)} ${typeBadge(i.type)}</td><td>${p.days % 1 ? p.days.toFixed(1) : p.days}</td><td>${peso(p.gross)}</td><td class="minus">${peso(p.caDeduct)}</td><td class="minus">${peso(p.itemsDeduct)}</td><td><b class="${p.net < 0 ? 'minus' : ''}">${peso(p.net)}</b></td></tr>`; }).join('')}</tbody>
+    <tfoot><tr><td>Total</td><td>${t.days % 1 ? t.days.toFixed(1) : t.days}</td><td>${peso(t.gross)}</td><td class="minus">${peso(t.caDeduct)}</td><td class="minus">${peso(t.itemsDeduct)}</td><td>${peso(t.net)}</td></tr></tfoot>
+  </table></div><p class="muted" style="font-size:14px;margin:8px 0 0">Tap a worker to see their payslip or change this week's deduction.</p>` : `<div class="empty">Mark attendance or add an entry to see this week's pay.</div>`;
 
   return `
   <div class="weekhead">
@@ -353,8 +409,8 @@ function renderWeek(){
     <div class="lbl" style="text-align:right">${daysTxt(t.days)} worked</div>
     <div class="breakdown">
       <span>Gross salary <b>${peso(t.gross)}</b></span>
-      <span>Cash advances <b>${peso(t.ca)}</b></span>
-      <span>Items bought <b>${peso(t.items)}</b></span>
+      <span>Cash advance deducted <b>${peso(t.caDeduct)}</b></span>
+      <span>Items deducted <b>${peso(t.itemsDeduct)}</b></span>
     </div>
   </div>
 
@@ -370,8 +426,8 @@ function renderWeek(){
     ${rows}
     <div class="daytot">
       <div>Salary<b>${peso(day.gross)}</b></div>
-      <div>Cash advances<b class="minus">${peso(day.ca)}</b></div>
-      <div>Items<b class="minus">${peso(day.items)}</b></div>
+      <div>Cash advance given<b class="minus">${peso(day.ca)}</b></div>
+      <div>Items bought<b class="minus">${peso(day.items)}</b></div>
       <div>Net for the day<b>${peso(day.net)}</b></div>
     </div>
     <div class="row" style="margin-top:12px">
@@ -392,7 +448,7 @@ function renderWorkers(){
   const removed = state.workers.filter(w => w.active === false);
   const list = arr => arr.map(w => `
     <div class="wk">
-      <div><b>${esc(w.name)}</b><div class="row" style="gap:8px;margin-top:2px">${typeBadge(w.type)}</div></div>
+      <div><b>${esc(w.name)}</b><div class="row" style="gap:8px;margin-top:2px">${typeBadge(w.type)}<span class="muted" style="font-size:13px">${esc(dedTxt(w))}</span></div></div>
       <div class="rate">${peso(w.rate)}<span class="muted" style="font-weight:400">/day</span></div>
       <div class="row" style="gap:4px">
         ${w.active === false
@@ -415,7 +471,7 @@ function renderHistory(){
   if (!state.history.length) return `<div class="panel"><div class="empty">Closed weeks show up here. Close the current week from the This week tab.</div></div>`;
   return `<div class="panel">${state.history.map(h => {
     const c = calc(h), t = c.tot, open = openHist === h.id;
-    const wids = Object.keys(c.perWorker);
+    const wids = activeIds(c);
     return `<div class="hist">
       <button class="hist-head" onclick="openHist=${open ? 'null' : `'${h.id}'`};render()" aria-expanded="${open}">
         <div><h3>${weekLabel(h)}</h3><div class="muted" style="font-size:14px">${wids.length} workers, ${daysTxt(t.days)}, gross ${peso(t.gross)}</div></div>
@@ -423,10 +479,10 @@ function renderHistory(){
       </button>
       ${open ? `<div class="hist-body">
         <div class="tablewrap"><table>
-          <thead><tr><th>Worker</th><th>Days</th><th>Gross</th><th>Cash adv.</th><th>Items</th><th>Net pay</th></tr></thead>
+          <thead><tr><th>Worker</th><th>Days</th><th>Gross</th><th>CA deducted</th><th>Items deducted</th><th>Net pay</th></tr></thead>
           <tbody>${wids.map(id => { const p = c.perWorker[id], i = workerInfo(id, h); return `
-            <tr class="click" onclick="payslip('${id}','${h.id}')"><td>${esc(i.name)} ${typeBadge(i.type)}</td><td>${p.days}</td><td>${peso(p.gross)}</td><td class="minus">${peso(p.ca)}</td><td class="minus">${peso(p.items)}</td><td><b>${peso(p.net)}</b></td></tr>`; }).join('')}</tbody>
-          <tfoot><tr><td>Total</td><td>${t.days}</td><td>${peso(t.gross)}</td><td class="minus">${peso(t.ca)}</td><td class="minus">${peso(t.items)}</td><td>${peso(t.net)}</td></tr></tfoot>
+            <tr class="click" onclick="payslip('${id}','${h.id}')"><td>${esc(i.name)} ${typeBadge(i.type)}</td><td>${p.days}</td><td>${peso(p.gross)}</td><td class="minus">${peso(p.caDeduct)}</td><td class="minus">${peso(p.itemsDeduct)}</td><td><b>${peso(p.net)}</b></td></tr>`; }).join('')}</tbody>
+          <tfoot><tr><td>Total</td><td>${t.days}</td><td>${peso(t.gross)}</td><td class="minus">${peso(t.caDeduct)}</td><td class="minus">${peso(t.itemsDeduct)}</td><td>${peso(t.net)}</td></tr></tfoot>
         </table></div>
         <div class="row" style="margin-top:12px">
           ${state.week ? '' : `<button class="btn sm" onclick="reopenWeek('${h.id}')">Reopen to edit</button>`}
@@ -515,7 +571,9 @@ function snapshotRoster(week){
 function closeWeek(){
   const w = state.week, c = calc(w);
   if (!confirm(`Close ${weekLabel(w)}?\n\nNet payable: ${peso(c.tot.net)}\n\nIt will be saved to History and you can start the next week.`)) return;
-  state.history.unshift({...w, roster: snapshotRoster(w), closedAt: Date.now()});
+  const applied = {};
+  for (const id in c.perWorker) applied[id] = {ca: c.perWorker[id].caDeduct, items: c.perWorker[id].itemsDeduct};
+  state.history.unshift({...w, applied, roster: snapshotRoster(w), closedAt: Date.now()});
   state.history.sort((a, b) => b.start.localeCompare(a.start));
   state.week = null; selDay = null;
   save('Week saved to history');
@@ -525,7 +583,7 @@ function reopenWeek(id){
   if (!confirm('Reopen this week for editing? It moves back to This week until you close it again.')) return;
   const h = state.history.find(x => x.id === id);
   state.history = state.history.filter(x => x.id !== id);
-  const {closedAt, ...week} = h;
+  const {closedAt, applied, ...week} = h;
   state.week = week; selDay = week.start; view = 'week';
   save('Week reopened');
 }
@@ -537,16 +595,29 @@ function deleteHistory(id){
 }
 
 /* ---------- Payslip ---------- */
+function balanceBlock(title, prev, given, entries, deducted, left){
+  if (!prev && !given && !deducted) return '';
+  return `<h4 style="margin:16px 0 4px">${title}</h4><table><tbody>
+    ${prev ? `<tr><td>Balance from previous weeks</td><td>${peso(prev)}</td></tr>` : ''}
+    ${entries}
+    <tr><td><b>Deducted this week</b></td><td class="minus"><b>${peso(deducted)}</b></td></tr>
+    <tr><td>Remaining balance</td><td>${peso(left)}</td></tr>
+  </tbody></table>`;
+}
 function payslip(wid, histId){
   const week = histId ? state.history.find(h => h.id === histId) : state.week;
-  const c = calc(week), p = c.perWorker[wid], info = workerInfo(wid, week);
+  const c = calc(week), info = workerInfo(wid, week);
+  const p = c.perWorker[wid] || {days:0, gross:0, caPrev:0, itPrev:0, caGiven:0, itemsGiven:0, caOwed:0, itOwed:0, caDeduct:0, itemsDeduct:0, caLeft:0, itemsLeft:0, net:0};
   const dayRows = c.dates.map(d => {
     const a = (week.attendance[d] || {})[wid];
     if (!a || !a.d) return '';
     return `<tr><td>${fmt(d, {weekday:'short', month:'short', day:'numeric'})}</td><td>${a.d === 1 ? 'Full' : 'Half'}</td><td>${peso(a.rate)}</td><td>${peso(a.d * a.rate)}</td></tr>`;
   }).join('');
-  const ca = week.advances.filter(x => x.wid === wid);
-  const it = week.items.filter(x => x.wid === wid);
+  const caRows = week.advances.filter(x => x.wid === wid).map(x => `<tr><td>${fmt(x.date)} cash advance${x.note ? ` <span class="muted">(${esc(x.note)})</span>` : ''}</td><td>${peso(x.amount)}</td></tr>`).join('');
+  const itRows = week.items.filter(x => x.wid === wid).map(x => `<tr><td>${fmt(x.date)} ${esc(x.name)}</td><td>${peso(x.price)}</td></tr>`).join('');
+  const worker = findWorker(wid) || {};
+  const o = (week.override || {})[wid];
+  const canAdjust = !histId && (p.caOwed > 0 || p.itOwed > 0);
   openModal(`<h3>Payslip</h3>
     <div class="spread"><div><b style="font-size:18px">${esc(info.name)}</b> ${typeBadge(info.type)}</div><div class="muted">${weekLabel(week)}</div></div>
     <div class="tablewrap" style="margin-top:10px"><table>
@@ -554,15 +625,94 @@ function payslip(wid, histId){
       <tbody>${dayRows || '<tr><td colspan="4" class="muted">No days worked</td></tr>'}</tbody>
       <tfoot><tr><td>Gross salary</td><td>${daysTxt(p.days)}</td><td></td><td class="plus">${peso(p.gross)}</td></tr></tfoot>
     </table></div>
-    ${ca.length ? `<h4 style="margin:14px 0 4px">Cash advances</h4><table><tbody>${ca.map(x => `<tr><td>${fmt(x.date)}${x.note ? ` <span class="muted">${esc(x.note)}</span>` : ''}</td><td class="minus">${peso(x.amount)}</td></tr>`).join('')}</tbody></table>` : ''}
-    ${it.length ? `<h4 style="margin:14px 0 4px">Items bought</h4><table><tbody>${it.map(x => `<tr><td>${fmt(x.date)} ${esc(x.name)}</td><td class="minus">${peso(x.price)}</td></tr>`).join('')}</tbody></table>` : ''}
-    <div style="margin-top:12px">
+    ${balanceBlock('Cash advance', p.caPrev, p.caGiven, caRows, p.caDeduct, p.caLeft)}
+    ${balanceBlock('Items bought', p.itPrev, p.itemsGiven, itRows, p.itemsDeduct, p.itemsLeft)}
+    <div style="margin-top:14px">
       <div class="spread"><span>Gross salary</span><b class="num">${peso(p.gross)}</b></div>
-      <div class="spread"><span>Less cash advances</span><b class="num minus">${peso(p.ca)}</b></div>
-      <div class="spread"><span>Less items bought</span><b class="num minus">${peso(p.items)}</b></div>
+      <div class="spread"><span>Less cash advance deduction</span><b class="num minus">${peso(p.caDeduct)}</b></div>
+      <div class="spread"><span>Less items deduction</span><b class="num minus">${peso(p.itemsDeduct)}</b></div>
       <div class="slip-total"><span>Net pay</span><span class="num">${peso(p.net)}</span></div>
     </div>
+    ${canAdjust ? `<div class="adjust">
+      <b>Change this week's deduction</b>
+      <p class="muted" style="margin:2px 0 10px;font-size:14px">${o ? 'Custom amount set for this week.' : esc(dedTxt(worker)) + '.'} Anything not deducted carries over to next week.</p>
+      <div class="row" style="align-items:flex-end">
+        <label class="field" style="margin:0;flex:1;min-width:130px"><span>Cash advance (₱)</span><input id="f_oca" type="number" inputmode="decimal" min="0" step="0.01" value="${p.caDeduct}" ${p.caOwed ? '' : 'disabled'}></label>
+        <label class="field" style="margin:0;flex:1;min-width:130px"><span>Items (₱)</span><input id="f_oit" type="number" inputmode="decimal" min="0" step="0.01" value="${p.itemsDeduct}" ${p.itOwed ? '' : 'disabled'}></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button class="btn sm primary" onclick="saveOverride('${wid}')">Save for this week</button>${o ? `<button class="btn sm" onclick="resetOverride('${wid}')">Use worker's default</button>` : ''}</div>
+    </div>` : ''}
     <div class="modal-actions" style="margin-top:14px"><button class="btn" onclick="window.print()">Print</button><button class="btn primary" onclick="closeModal()">Done</button></div>`);
+}
+function saveOverride(wid){
+  const read = id => { const v = val(id).trim(); return v === '' ? 0 : parseFloat(v); };
+  const ca = read('f_oca'), it = read('f_oit');
+  if (!(ca >= 0) || !(it >= 0)) return toast('Enter amounts of zero or more');
+  state.week.override = state.week.override || {};
+  state.week.override[wid] = {ca, items: it};
+  save('Deduction updated for this week');
+  payslip(wid);
+}
+function resetOverride(wid){
+  delete state.week.override[wid];
+  save("Back to the worker's default");
+  payslip(wid);
+}
+
+/* ---------- Dashboard ---------- */
+function renderDashboard(){
+  const L = ledger();
+  const ids = Object.keys(L.bal).filter(id => L.bal[id].ca > 0 || L.bal[id].items > 0);
+  const totCA = r2(ids.reduce((a, id) => a + L.bal[id].ca, 0));
+  const totIt = r2(ids.reduce((a, id) => a + L.bal[id].items, 0));
+  const last = L.order[L.order.length - 1];
+  const asOf = state.week ? `After this week's deductions (${weekLabel(state.week)})` : last ? `As of the week of ${weekLabel(last)}` : '';
+  const cur = state.week ? L.weeks[state.week.id].tot : null;
+  const weeksLeft = (left, set) => left <= 0 ? 0 : isAmt(set) && set > 0 ? Math.ceil(left / set) : 1;
+  const rows = ids.sort((a, b) => (L.bal[b].ca + L.bal[b].items) - (L.bal[a].ca + L.bal[a].items)).map(id => {
+    const b = L.bal[id], w = findWorker(id) || {}, info = workerInfo(id, last);
+    const n = Math.max(weeksLeft(b.ca, w.caDeduct), weeksLeft(b.items, w.itemDeduct));
+    return `<tr class="click" onclick="balanceHistory('${id}')">
+      <td>${esc(info.name)} ${typeBadge(info.type)}</td>
+      <td class="minus">${peso(b.ca)}</td><td class="minus">${peso(b.items)}</td><td><b>${peso(b.ca + b.items)}</b></td>
+      <td class="muted">${isAmt(w.caDeduct) ? peso(w.caDeduct) : 'Full'} / ${isAmt(w.itemDeduct) ? peso(w.itemDeduct) : 'Full'}</td>
+      <td>${n === 1 ? 'Next payday' : `About ${n} weeks`}</td>
+    </tr>`;
+  }).join('');
+  return `
+  <div class="stats">
+    <div class="stat"><div class="lbl">Remaining cash advance</div><div class="val num">${peso(totCA)}</div></div>
+    <div class="stat"><div class="lbl">Remaining for items bought</div><div class="val num">${peso(totIt)}</div></div>
+    <div class="stat dark"><div class="lbl">Total still owed to you</div><div class="val num">${peso(totCA + totIt)}</div></div>
+  </div>
+  ${asOf ? `<p class="muted" style="margin:-4px 0 16px;font-size:14px">${asOf}.${cur ? ` This week deducts ${peso(cur.caDeduct)} in cash advance and ${peso(cur.itemsDeduct)} in items.` : ''}</p>` : ''}
+  <div class="panel">
+    <h3 style="font-size:22px;margin-bottom:8px">Balances per worker</h3>
+    ${rows ? `<div class="tablewrap"><table>
+      <thead><tr><th>Worker</th><th>Cash advance</th><th>Items</th><th>Total</th><th>Weekly deduction</th><th>Paid off in</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div><p class="muted" style="font-size:14px;margin:8px 0 0">Tap a worker to see their week-by-week balance. Set weekly deductions in the Workers tab.</p>`
+    : '<div class="empty">No unpaid cash advances or items. Everyone is clear.</div>'}
+  </div>`;
+}
+function balanceHistory(id){
+  const L = ledger(), info = workerInfo(id, L.order[L.order.length - 1]);
+  const rows = L.order.map(w => {
+    const p = L.weeks[w.id].perWorker[id];
+    if (!p || !(p.caOwed || p.itOwed)) return '';
+    return `<tr><td>${fmt(w.start)}${w.id === (state.week || {}).id ? ' <span class="badge">Now</span>' : ''}</td>
+      <td>${p.caGiven ? peso(p.caGiven) : ''}</td><td class="minus">${p.caDeduct ? peso(p.caDeduct) : ''}</td><td><b>${peso(p.caLeft)}</b></td>
+      <td>${p.itemsGiven ? peso(p.itemsGiven) : ''}</td><td class="minus">${p.itemsDeduct ? peso(p.itemsDeduct) : ''}</td><td><b>${peso(p.itemsLeft)}</b></td></tr>`;
+  }).reverse().join('');
+  const items = L.order.flatMap(w => w.items.filter(x => x.wid === id)).sort((a, b) => b.date.localeCompare(a.date));
+  openModal(`<h3>${esc(info.name)}</h3>
+    <p class="muted" style="margin-top:-6px">Week-by-week balance, newest first</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Week of</th><th>CA given</th><th>CA deducted</th><th>CA left</th><th>Items given</th><th>Items deducted</th><th>Items left</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    ${items.length ? `<h4 style="margin:16px 0 4px">Items bought for this worker</h4><table><tbody>${items.map(x => `<tr><td>${fmt(x.date, {month:'short', day:'numeric', year:'numeric'})} ${esc(x.name)}</td><td>${peso(x.price)}</td></tr>`).join('')}</tbody></table>` : ''}
+    <div class="modal-actions" style="margin-top:14px"><button class="btn primary" onclick="closeModal()">Done</button></div>`);
 }
 
 /* ---------- Workers ---------- */
@@ -575,6 +725,9 @@ function workerForm(id){
       <option ${w.type === 'Skilled' ? 'selected' : ''}>Skilled</option>
     </select></label>
     <label class="field"><span>Daily rate (₱)</span><input id="f_rate" type="number" inputmode="decimal" min="0" step="0.01" value="${w.rate}"></label>
+    <label class="field"><span>Weekly cash advance deduction (₱)</span><input id="f_cad" type="number" inputmode="decimal" min="0" step="0.01" value="${isAmt(w.caDeduct) ? w.caDeduct : ''}" placeholder="Blank = deduct the full balance"></label>
+    <label class="field"><span>Weekly items deduction (₱)</span><input id="f_itd" type="number" inputmode="decimal" min="0" step="0.01" value="${isAmt(w.itemDeduct) ? w.itemDeduct : ''}" placeholder="Blank = deduct the full balance"></label>
+    <p class="muted" style="font-size:14px;margin:-4px 0 12px">Whatever isn't deducted carries over to next week. A week's deductions never go above what the worker earned that week.</p>
     ${id && state.week ? `<label class="check"><input type="checkbox" id="f_apply" checked> Also apply the new rate to days already marked this week</label>` : ''}
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveWorker('${id || ''}')">${id ? 'Save changes' : 'Add worker'}</button></div>`);
   setTimeout(() => document.getElementById('f_name').focus(), 50);
@@ -583,15 +736,18 @@ function saveWorker(id){
   const name = val('f_name').trim(), type = val('f_type'), rate = parseFloat(val('f_rate'));
   if (!name) return toast('Enter a name');
   if (!(rate >= 0)) return toast('Enter the daily rate');
+  const opt = v => v.trim() === '' ? null : parseFloat(v);
+  const caDeduct = opt(val('f_cad')), itemDeduct = opt(val('f_itd'));
+  if ((caDeduct !== null && !(caDeduct >= 0)) || (itemDeduct !== null && !(itemDeduct >= 0))) return toast('Enter a valid deduction amount');
   if (id){
     const w = findWorker(id);
     const applyEl = document.getElementById('f_apply');
     if (applyEl && applyEl.checked && state.week){
       Object.values(state.week.attendance).forEach(day => { if (day[id]) day[id].rate = rate; });
     }
-    Object.assign(w, {name, type, rate});
+    Object.assign(w, {name, type, rate, caDeduct, itemDeduct});
   } else {
-    state.workers.push({id: uid(), name, type, rate, active: true});
+    state.workers.push({id: uid(), name, type, rate, caDeduct, itemDeduct, active: true});
   }
   closeModal();
   save(id ? 'Changes saved' : 'Worker added');
