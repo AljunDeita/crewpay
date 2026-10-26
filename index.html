@@ -345,6 +345,10 @@ function renderStart(){
       <label class="field" style="margin:0;max-width:220px"><span>First day</span><input type="date" id="startDate" value="${nextStart()}"></label>
       <button class="btn vis" style="align-self:flex-end" onclick="startWeek()">Start week</button>
     </div>
+    ${state.history.length ? `<div class="row" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+      <span class="muted">Need to fix last week?</span>
+      <button class="btn sm" onclick="reopenPrevious()">Reopen previous week (${weekLabel(state.history[0])})</button>
+    </div>` : ''}
   </div>`;
 }
 
@@ -406,7 +410,10 @@ function renderWeek(){
   return `
   <div class="weekhead">
     <div><div class="muted">Current week</div><h2>${weekLabel(w)}</h2></div>
-    <button class="btn" onclick="closeWeek()">Close week and save</button>
+    <div class="row">
+      ${state.history.length ? `<button class="btn" onclick="reopenPrevious()">Reopen previous week</button>` : ''}
+      <button class="btn" onclick="closeWeek()">Close week and save</button>
+    </div>
   </div>
   <div class="tag">
     <div><div class="lbl">Net payable this week</div><div class="big num">${peso(t.net)}</div></div>
@@ -489,7 +496,7 @@ function renderHistory(){
           <tfoot><tr><td>Total</td><td>${t.days}</td><td>${peso(t.gross)}</td><td class="minus">${peso(t.caDeduct)}</td><td class="minus">${peso(t.itemsDeduct)}</td><td>${peso(t.net)}</td></tr></tfoot>
         </table></div>
         <div class="row" style="margin-top:12px">
-          ${state.week ? '' : `<button class="btn sm" onclick="reopenWeek('${h.id}')">Reopen to edit</button>`}
+          <button class="btn sm" onclick="reopenWeek('${h.id}')">Reopen to edit</button>
           <button class="btn sm danger" onclick="deleteHistory('${h.id}')">Delete week</button>
         </div>
       </div>` : ''}
@@ -605,14 +612,25 @@ function closeWeek(){
   state.week = null; selDay = null;
   save('Week saved to history');
 }
+const weekHasData = w => !!w && (
+  Object.values(w.attendance || {}).some(day => Object.values(day).some(a => a && a.d)) ||
+  (w.advances || []).length > 0 || (w.items || []).length > 0);
+/* Reopens a closed week so everything in it (attendance, cash advances, items, deductions) can be edited again.
+   Only one week can be open at a time, so a current week that is still empty is dropped; one with entries must be closed first. */
 function reopenWeek(id){
-  if (state.week) return toast('Close the current week first');
-  if (!confirm('Reopen this week for editing? It moves back to This week until you close it again.')) return;
   const h = state.history.find(x => x.id === id);
+  if (!h) return toast('Week not found');
+  if (weekHasData(state.week)) return alert('The current week already has entries. Close it first (Close week and save), then reopen the week you want from History.');
+  const replacing = !!state.week;
+  if (!confirm(`Reopen ${weekLabel(h)} for editing?\n\nIt moves back to This week until you close it again.${replacing ? '\n\nThe empty week you started will be removed.' : ''}`)) return;
   state.history = state.history.filter(x => x.id !== id);
   const {closedAt, applied, ...week} = h;
-  state.week = week; selDay = week.start; view = 'week';
+  state.week = week; selDay = week.start; view = 'week'; openHist = null;
   save('Week reopened');
+}
+function reopenPrevious(){
+  if (!state.history.length) return toast('No closed week to reopen');
+  reopenWeek(state.history[0].id);
 }
 function deleteHistory(id){
   if (!confirm('Delete this week from history? This cannot be undone.')) return;
