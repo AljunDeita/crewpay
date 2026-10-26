@@ -348,6 +348,7 @@ function renderStart(){
     ${state.history.length ? `<div class="row" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
       <span class="muted">Need to fix last week?</span>
       <button class="btn sm" onclick="reopenPrevious()">Reopen previous week (${weekLabel(state.history[0])})</button>
+      ${state.history.length > 1 ? `<button class="btn sm" onclick="reopenPicker()">Choose another week</button>` : ''}
     </div>` : ''}
   </div>`;
 }
@@ -411,7 +412,7 @@ function renderWeek(){
   <div class="weekhead">
     <div><div class="muted">Current week</div><h2>${weekLabel(w)}</h2></div>
     <div class="row">
-      ${state.history.length ? `<button class="btn" onclick="reopenPrevious()">Reopen previous week</button>` : ''}
+      ${state.history.length ? `<button class="btn" onclick="reopenPicker()">Reopen a week</button>` : ''}
       <button class="btn" onclick="closeWeek()">Close week and save</button>
     </div>
   </div>
@@ -622,11 +623,28 @@ function reopenWeek(id){
   if (!h) return toast('Week not found');
   if (weekHasData(state.week)) return alert('The current week already has entries. Close it first (Close week and save), then reopen the week you want from History.');
   const replacing = !!state.week;
-  if (!confirm(`Reopen ${weekLabel(h)} for editing?\n\nIt moves back to This week until you close it again.${replacing ? '\n\nThe empty week you started will be removed.' : ''}`)) return;
+  const older = state.history[0] && state.history[0].id !== id;
+  if (!confirm(`Reopen ${weekLabel(h)} for editing?\n\nIt moves back to This week until you close it again.${older ? '\n\nNote: newer closed weeks keep the deductions they were saved with, so balances in them will not recalculate.' : ''}${replacing ? '\n\nThe empty week you started will be removed.' : ''}`)) return;
   state.history = state.history.filter(x => x.id !== id);
   const {closedAt, applied, ...week} = h;
   state.week = week; selDay = week.start; view = 'week'; openHist = null;
   save('Week reopened');
+}
+/* Lets the user pick which closed week to reopen. */
+function reopenPicker(){
+  if (!state.history.length) return toast('No closed week to reopen');
+  if (weekHasData(state.week)) return alert('The current week already has entries. Close it first (Close week and save), then reopen the week you want.');
+  const rows = state.history.map((h, i) => {
+    const t = calc(h).tot;
+    return `<button class="btn" style="display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;text-align:left;margin-bottom:8px" onclick="closeModal();reopenWeek('${h.id}')">
+      <span><b>${weekLabel(h)}</b>${i === 0 ? ' <span class="badge">Latest</span>' : ''}<br><span class="muted" style="font-size:13px;font-weight:400">${daysTxt(t.days)} worked, gross ${peso(t.gross)}</span></span>
+      <span class="num">${peso(t.net)}</span>
+    </button>`;
+  }).join('');
+  openModal(`<h3>Reopen which week?</h3>
+    <p class="muted" style="margin-top:-6px;font-size:14px">Pick a closed week to edit again. It moves back to This week until you close it.</p>
+    ${rows}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 }
 function reopenPrevious(){
   if (!state.history.length) return toast('No closed week to reopen');
