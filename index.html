@@ -102,7 +102,10 @@ nav{display:flex;gap:4px;border-bottom:2px solid var(--line);margin-bottom:18px}
 .daytot b{display:block;font-size:17px;color:var(--ink);font-variant-numeric:tabular-nums}
 
 .entries{margin-top:12px}
-.entry{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;padding:8px 0;border-top:1px dashed var(--line);font-size:15px}
+.entry{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:6px 10px;align-items:center;padding:8px 0;border-top:1px dashed var(--line);font-size:15px}
+.entry .edit{border:1px solid var(--line);background:var(--card);border-radius:6px;padding:3px 10px;font-size:13px;font-weight:600;color:var(--steel)}
+.entry .edit:hover{background:var(--soft)}
+@media (max-width:640px){.entry{grid-template-columns:auto 1fr auto auto}.entry .num{grid-column:2;grid-row:2}.entry .edit{grid-column:3;grid-row:2}.entry .x{grid-column:4;grid-row:2}}
 .kind{font-size:12px;font-weight:700;padding:2px 7px;border-radius:5px}
 .kind.ca{background:rgba(194,65,45,.12);color:var(--minus)}
 .kind.it{background:rgba(62,85,102,.14);color:var(--steel)}
@@ -388,6 +391,7 @@ function renderWeek(){
       <span class="kind ${x.k}">${x.k === 'ca' ? 'Cash advance' : 'Item'}</span>
       <span><b>${esc(workerInfo(x.wid, w).name)}</b>${x.k === 'it' ? ` bought ${esc(x.name)}` : (x.note ? ` <span class="muted">(${esc(x.note)})</span>` : '')}</span>
       <span class="num minus">${peso(x.k === 'ca' ? x.amount : x.price)}</span>
+      <button class="edit" aria-label="Edit entry" onclick="entryForm('${x.k}','${x.id}')">Edit</button>
       <button class="x" aria-label="Delete entry" onclick="delEntry('${x.k}','${x.id}')">×</button>
     </div>`).join('') : '';
 
@@ -528,38 +532,61 @@ function editDayRate(wid){
   w.attendance[selDay][wid] = {d: cur ? cur.d : 0, rate};
   save('Rate updated for this day');
 }
-function entryForm(kind){
+const entryList = kind => kind === 'ca' ? state.week.advances : state.week.items;
+function entryForm(kind, id){
   const w = state.week;
-  const workers = state.workers.filter(x => x.active !== false);
-  if (!workers.length) return toast('Add a worker first');
   const isCA = kind === 'ca';
-  openModal(`<h3>${isCA ? 'Add cash advance' : 'Add item bought'}</h3>
-    <label class="field"><span>Worker</span><select id="f_wid">${workers.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
-    <label class="field"><span>Date</span><select id="f_date">${weekDates(w).map(d => `<option value="${d}" ${d === selDay ? 'selected' : ''}>${fmt(d, {weekday:'short', month:'short', day:'numeric'})}</option>`).join('')}</select></label>
-    ${isCA ? '' : `<label class="field"><span>Item name</span><input id="f_name" placeholder="e.g. Rice 5kg"></label>`}
-    <label class="field"><span>${isCA ? 'Amount' : 'Price'} (₱)</span><input id="f_amt" type="number" inputmode="decimal" min="0" step="0.01"></label>
-    ${isCA ? `<label class="field"><span>Note (optional)</span><input id="f_note" placeholder="e.g. For fare"></label>` : ''}
-    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveEntry('${kind}')">${isCA ? 'Add cash advance' : 'Add item'}</button></div>`);
-  setTimeout(() => document.getElementById(isCA ? 'f_amt' : 'f_name').focus(), 50);
+  const e = id ? entryList(kind).find(x => x.id === id) : null;
+  if (id && !e) return toast('Entry not found');
+  // Keep a removed worker selectable when editing an old entry that belongs to them.
+  const workers = state.workers.filter(x => x.active !== false || (e && x.id === e.wid));
+  if (!workers.length) return toast('Add a worker first');
+  const curDate = e ? e.date : selDay;
+  const curAmt = e ? (isCA ? e.amount : e.price) : '';
+  openModal(`<h3>${id ? (isCA ? 'Edit cash advance' : 'Edit item bought') : (isCA ? 'Add cash advance' : 'Add item bought')}</h3>
+    <label class="field"><span>Worker</span><select id="f_wid">${workers.map(x => `<option value="${x.id}" ${e && x.id === e.wid ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    <label class="field"><span>Date</span><select id="f_date">${weekDates(w).map(d => `<option value="${d}" ${d === curDate ? 'selected' : ''}>${fmt(d, {weekday:'short', month:'short', day:'numeric'})}</option>`).join('')}</select></label>
+    ${isCA ? '' : `<label class="field"><span>Item name</span><input id="f_name" placeholder="e.g. Rice 5kg" value="${e ? esc(e.name) : ''}"></label>`}
+    <label class="field"><span>${isCA ? 'Amount' : 'Price'} (₱)</span><input id="f_amt" type="number" inputmode="decimal" min="0" step="0.01" value="${curAmt}"></label>
+    ${isCA ? `<label class="field"><span>Note (optional)</span><input id="f_note" placeholder="e.g. For fare" value="${e ? esc(e.note || '') : ''}"></label>` : ''}
+    <div class="modal-actions">
+      ${id ? `<button class="btn danger" style="margin-right:auto" onclick="closeModal();delEntry('${kind}','${id}')">Delete</button>` : ''}
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn primary" onclick="saveEntry('${kind}'${id ? `,'${id}'` : ''})">${id ? 'Save changes' : (isCA ? 'Add cash advance' : 'Add item')}</button>
+    </div>`);
+  setTimeout(() => document.getElementById(id ? 'f_amt' : (isCA ? 'f_amt' : 'f_name')).focus(), 50);
 }
-function saveEntry(kind){
+function saveEntry(kind, id){
   const wid = val('f_wid'), date = val('f_date'), amt = parseFloat(val('f_amt'));
   if (!(amt > 0)) return toast('Enter an amount above zero');
-  if (kind === 'ca'){
-    state.week.advances.push({id: uid(), wid, date, amount: amt, note: val('f_note').trim()});
-  } else {
-    const name = val('f_name').trim();
+  let name = '';
+  if (kind !== 'ca'){
+    name = val('f_name').trim();
     if (!name) return toast('Enter the item name');
-    state.week.items.push({id: uid(), wid, date, name, price: amt});
+  }
+  const note = kind === 'ca' ? val('f_note').trim() : '';
+  const list = entryList(kind);
+  const e = id ? list.find(x => x.id === id) : null;
+  if (id && !e) return toast('Entry not found');
+  if (e){
+    e.wid = wid; e.date = date;
+    if (kind === 'ca'){ e.amount = amt; e.note = note; }
+    else { e.name = name; e.price = amt; }
+  } else if (kind === 'ca'){
+    list.push({id: uid(), wid, date, amount: amt, note});
+  } else {
+    list.push({id: uid(), wid, date, name, price: amt});
   }
   selDay = date;
   closeModal();
-  save(kind === 'ca' ? 'Cash advance added' : 'Item added');
+  save(e ? (kind === 'ca' ? 'Cash advance updated' : 'Item updated') : (kind === 'ca' ? 'Cash advance added' : 'Item added'));
 }
 function delEntry(kind, id){
-  if (!confirm('Delete this entry?')) return;
-  const key = kind === 'ca' ? 'advances' : 'items';
-  state.week[key] = state.week[key].filter(x => x.id !== id);
+  const e = entryList(kind).find(x => x.id === id);
+  if (!e) return;
+  const what = kind === 'ca' ? `cash advance of ${peso(e.amount)}` : `${e.name} (${peso(e.price)})`;
+  if (!confirm(`Delete this ${what} for ${workerInfo(e.wid, state.week).name}?`)) return;
+  state.week[kind === 'ca' ? 'advances' : 'items'] = entryList(kind).filter(x => x.id !== id);
   save('Entry deleted');
 }
 function snapshotRoster(week){
